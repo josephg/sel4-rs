@@ -6,6 +6,7 @@ mod boot;
 mod racycell;
 mod serial;
 
+use core::arch::asm;
 use core::ffi::c_void;
 use core::fmt::Write;
 use core::panic::PanicInfo;
@@ -37,9 +38,9 @@ pub(crate) extern "C" fn boot_sys(multiboot_magic: u32, mbi: *mut c_void) -> ! {
     let mut port = unsafe { SerialPort::init() };
 
     port.write_str("hi from boot_sys!\n").unwrap();
-  loop {
-
-  }
+    unsafe { asm!("hlt"); }
+    loop {
+    }
 }
 
 
