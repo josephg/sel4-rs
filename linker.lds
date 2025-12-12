@@ -108,7 +108,7 @@ SECTIONS
 
 
     /* TODO: SKIM window padding lives here. */
-    . = ALIGN(8K);
+    /* . = ALIGN(8K); */
 
 
     ki_skim_end = .;

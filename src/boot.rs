@@ -300,6 +300,9 @@ static GDT64_PTR: GdtPtr = GdtPtr {
     base: GDT64.as_ptr() as *const u8,
 };
 
+
+const IA32_EFER_MSR: u32 = 0xC0000080;
+
 /// Enable x64 mode on the current CPU.
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
@@ -318,7 +321,7 @@ extern "C" fn enable_x64_mode() {
             mov cr4, eax
 
             // Set Long Mode Extension (bit 8) in IA32_EFER (MSR 0xC000_0080).
-            mov ecx, 0xC0000080
+            mov ecx, {IA32_EFER_MSR}
             rdmsr
             or eax, 0x100
             wrmsr
@@ -328,8 +331,11 @@ extern "C" fn enable_x64_mode() {
             or  eax, 0x80000000
             mov cr0, eax
 
-            // Enable PCID (CR4 bit 17). This could be skipped, but PCID is available on all cpus
-            // for the last 15 years so lets just use it.
+            // PCID is only available on modern intel chips. AMD just implements invpcid, which
+            // works slightly differently. Given I'm on an amd chip, I'm just going to implement
+            // the latter.
+            //
+            // If we try to enable pcid when its not available we get a GPF.
             // mov eax, cr4
             // or  eax, 0x20000
             // mov cr4, eax
@@ -338,6 +344,7 @@ extern "C" fn enable_x64_mode() {
             ret
         ",
         boot_pml4 = sym BOOT_PML4,
+        IA32_EFER_MSR = const IA32_EFER_MSR,
         junk = sym junk,
     )
 }
