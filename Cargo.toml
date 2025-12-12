@@ -1,0 +1,27 @@
+[package]
+name = "sel4-rs"
+version = "0.1.0"
+edition = "2024"
+
+
+[[bin]]
+name = "sel4-rs"
+test = false
+bench = false
+
+[workspace]
+members = ["multiboot", "common"]
+
+[dependencies]
+no-panic = "0.1.35"
+uart_16550 = "0.4.0"
+
+[profile.dev]
+panic = "abort"
+#strip = true
+
+[profile.release]
+panic = "abort"
+strip = true
+debug = 0
+lto = true
