@@ -10,7 +10,7 @@ test = false
 bench = false
 
 [workspace]
-members = ["multiboot", "common"]
+members = ["common"]
 
 [dependencies]
 no-panic = "0.1.35"
