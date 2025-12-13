@@ -1,3 +1,11 @@
+//! This file implements a simple multiboot header to make the kernel easy to boot from qemu and
+//! grub.
+//!
+//! Currently only text mode is supported. At some point it'd be good to add framebuffer support.
+//!
+//! I also don't have a multiboot2 header here. Could add it when I work on bare metal support. But
+//! for now, Qemu doesn't support multiboot2. So it won't add much.
+
 #[repr(C)]
 #[repr(align(8))]
 struct MultibootHeader {
@@ -8,7 +16,7 @@ struct MultibootHeader {
 }
 
 enum MultibootFlags {
-    AlignModules = 1,
+    AlignModules = 1 << 0,
     MemoryInfo = 1 << 1,
 }
 

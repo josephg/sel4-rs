@@ -4,15 +4,15 @@
 mod multiboot;
 mod boot;
 mod racycell;
-mod serial;
+mod console;
 
+use crate::console::init_serial;
+use crate::racycell::RacyCell;
 use core::arch::asm;
 use core::ffi::c_void;
-use core::fmt::Write;
 use core::panic::PanicInfo;
-use crate::racycell::RacyCell;
-use crate::serial::SerialPort;
 // use no_panic::no_panic;
+
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -35,10 +35,15 @@ pub(crate) static KERNEL_STACK: RacyCell<KernelStack> = RacyCell::new(KernelStac
 
 #[unsafe(link_section = ".boot.text")]
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn boot_sys(multiboot_magic: u32, mbi: *mut c_void) -> ! {
-    let mut port = unsafe { SerialPort::init() };
+pub(crate) extern "C" fn boot_sys(_multiboot_magic: u32, _mbi: *mut c_void) -> ! {
+    unsafe { init_serial() };
 
-    write!(port, "Oh hi the number {}\n", 145).unwrap();
+
+    kprintln!("Hi from the kernel! {}", "oooohhhhh");
+
+    // write!(port, "Multiboot {:x}\n", multiboot_magic).unwrap();
+
+    panic!("oh nooo");
 
     // port.write_str("hi from boot_sys!\n").unwrap();
     unsafe { asm!("hlt"); }

@@ -1,9 +1,9 @@
-// This is based on sel4's src/arch/x86/64/head.S. Lots of the code here is 32 bit code - which
-// I could either put in a separate crate and awkwardly, manually glue together. Or write in
-// inline assembly, which is what I'm doing here.
-//
-// The downside of this approach is all this code is assembly, not rust. But at least the package
-// layout is much simpler!
+//! This is based on sel4's src/arch/x86/64/head.S. Lots of the code here is 32 bit code - which
+//! I could either put in a separate crate and awkwardly, manually glue together. Or write in
+//! inline assembly, which is what I'm doing here.
+//!
+//! The downside of this approach is all this code is assembly, not rust. But at least the package
+//! layout is much simpler!
 
 use core::arch::naked_asm;
 use crate::{KERNEL_STACK, KERNEL_STACK_BITS, boot_sys};
@@ -51,6 +51,7 @@ const fn new_gdt(flags: u8, access_byte: u8) -> u64 {
 
 
 #[unsafe(naked)]
+#[allow(unused)]
 #[unsafe(link_section = ".phys.text")]
 extern "C" fn print_string() {
     naked_asm!(r"
@@ -73,6 +74,7 @@ extern "C" fn print_string() {
 
 // 64-bit variant: expects pointer in RDI and length in RSI (SysV ABI).
 #[unsafe(naked)]
+#[allow(unused)]
 #[unsafe(link_section = ".phys.text")]
 extern "C" fn print_string64() {
     naked_asm!(r"
@@ -335,8 +337,8 @@ extern "C" fn common_init() {
 }
 
 
-#[unsafe(link_section = ".phys.data")]
-static STR: [u8; 9] = *b"hi there\n";
+// #[unsafe(link_section = ".phys.data")]
+// static STR: [u8; 9] = *b"hi there\n";
 
 
 // #[unsafe(naked)]
