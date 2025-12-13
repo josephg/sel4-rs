@@ -3,6 +3,11 @@ name = "kernel"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "kernel"
+test = false
+bench = false
+
 [dependencies]
 no-panic = "0.1.35"
 uart_16550 = "0.4.0"

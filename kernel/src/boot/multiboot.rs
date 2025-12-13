@@ -20,15 +20,19 @@ enum MultibootFlags {
     MemoryInfo = 1 << 1,
 }
 
-const MULTIBOOT_MAGIC: i32 = 0x1BADB002;
+const MULTIBOOT_HDR_MAGIC: i32 = 0x1BADB002;
 const FLAGS: i32 = (MultibootFlags::AlignModules as i32) | (MultibootFlags::MemoryInfo as i32);
-const CHECKSUM: i32 = -(MULTIBOOT_MAGIC + FLAGS);
+const CHECKSUM: i32 = -(MULTIBOOT_HDR_MAGIC + FLAGS);
 
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".mbh")]
 static MULTIBOOT_HEADER: MultibootHeader = MultibootHeader {
-    magic: MULTIBOOT_MAGIC,
+    magic: MULTIBOOT_HDR_MAGIC,
     flags: FLAGS,
     checksum: CHECKSUM,
     padding: 0,
 };
+
+
+pub const MULTIBOOT_INFO_MAGIC: u32 = 0x2BADB002;
+

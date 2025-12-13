@@ -2,6 +2,7 @@
 
 use core::cell::UnsafeCell;
 
+#[repr(transparent)]
 pub struct RacyCell<T>(UnsafeCell<T>);
 
 impl<T> RacyCell<T> {

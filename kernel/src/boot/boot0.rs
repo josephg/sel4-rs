@@ -6,7 +6,7 @@
 //! layout is much simpler!
 
 use core::arch::naked_asm;
-use crate::{KERNEL_STACK, KERNEL_STACK_BITS, boot_sys};
+use super::boot1::{boot_sys, KERNEL_STACK, KERNEL_STACK_BITS};
 
 #[allow(dead_code)]
 unsafe extern "C" {
@@ -376,9 +376,10 @@ extern "C" fn common_init() {
 
 
 
-
-// This is called on the BSP. For now I'm assuming multiboot - though ideally it'd be nice to
-// actually check what mode the CPU is in and boot this kernel correctly in all cases.
+/// Main entrypoint in the kernel on x86_64 bit BSP when booting with multiboot.
+/// 
+/// For now I'm assuming multiboot - though ideally it'd be nice to actually check what mode the
+/// CPU is in and boot this kernel correctly in all cases.
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".phys.text")]
@@ -423,7 +424,7 @@ pub extern "C" fn _start() -> ! {
     ",
         boot_stack_top = sym boot_stack_top,
         common_init = sym common_init,
-        _start64 = sym _start64,
+        _start64 = sym start64,
     )
 }
 
@@ -431,7 +432,7 @@ pub extern "C" fn _start() -> ! {
 
 #[unsafe(naked)]
 #[unsafe(link_section = ".phys.text")]
-extern "C" fn _start64() -> ! {
+extern "C" fn start64() -> ! {
     // Ok we should now be in 64 bit mode. Bounce to the virtual memory region rather than using
     // the physical memory map.
     naked_asm!(r"
@@ -440,7 +441,7 @@ extern "C" fn _start64() -> ! {
             jmp rax
     ",
         // jmp {_entry_64}
-        _entry_64 = sym _entry_64,
+        _entry_64 = sym entry64,
     )
 }
 
@@ -448,7 +449,7 @@ extern "C" fn _start64() -> ! {
 // Boot section!
 #[unsafe(naked)]
 #[unsafe(link_section = ".boot.text")]
-extern "C" fn _entry_64() -> ! {
+extern "C" fn entry64() -> ! {
     naked_asm!(r"
         .code64
             // Update stack pointer
