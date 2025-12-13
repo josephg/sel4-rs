@@ -27,8 +27,6 @@ pub extern "C" fn boot_sys(multiboot_magic: u32, _mbi: *mut c_void) -> ! {
         kprintln!("Booting via multiboot v1");
     }
 
-
-
     unsafe { asm!("hlt"); }
     loop {
     }
