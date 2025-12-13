@@ -93,55 +93,6 @@ extern "C" fn print_string64() {
     ")
 }
 
-// // Convert a string literal into a fixed-size byte array for placing in .phys.data.
-// const fn str_to_array<const N: usize>(s: &str) -> [u8; N] {
-//     let bytes = s.as_bytes();
-//     // Panic in const eval if the caller gives us the wrong length.
-//     if bytes.len() != N {
-//         panic!("boot_print! length mismatch");
-//     }
-//
-//     let mut out = [0u8; N];
-//     let mut i = 0;
-//     while i < N {
-//         out[i] = bytes[i];
-//         i += 1;
-//     }
-//     out
-// }
-//
-// // Low-level wrapper that sets up EBX/ECX for `print_string`.
-// #[allow(dead_code)]
-// #[unsafe(naked)]
-// #[unsafe(link_section = ".phys.text")]
-// unsafe extern "C" fn boot_print_raw(msg_ptr: *const u8, len: u32) {
-//     naked_asm!(r"
-//     .code32
-//         mov ebx, [esp + 4] // msg_ptr
-//         mov ecx, [esp + 8] // len
-//         call {printer}
-//         ret
-//     ",
-//         printer = sym print_string,
-//     )
-// }
-//
-// // Macro to print a string literal via the serial port using the 32-bit boot console.
-// macro_rules! boot_print {
-//     ($s:literal) => {{
-//         const MSG: &str = $s;
-//         #[unsafe(link_section = ".phys.data")]
-//         static MSG_BYTES: [u8; MSG.len()] = str_to_array::<{ MSG.len() }>(MSG);
-//
-//         unsafe {
-//             boot_print_raw(MSG_BYTES.as_ptr(), MSG_BYTES.len() as u32);
-//         }
-//     }};
-// }
-// #[allow(unused_imports)]
-// pub(crate) use boot_print;
-
-
 /*
  *          2^64 +-------------------+
  *               | Kernel Page PDPT  | --+
@@ -339,13 +290,11 @@ extern "C" fn enable_x64_mode() {
             // mov eax, cr4
             // or  eax, 0x20000
             // mov cr4, eax
-// call {junk}
 
             ret
         ",
         boot_pml4 = sym BOOT_PML4,
         IA32_EFER_MSR = const IA32_EFER_MSR,
-        junk = sym junk,
     )
 }
 
@@ -390,38 +339,38 @@ extern "C" fn common_init() {
 static STR: [u8; 9] = *b"hi there\n";
 
 
-#[unsafe(naked)]
-#[unsafe(link_section = ".phys.text")]
-extern "C" fn junk() {
-    naked_asm!(r"
-    .code32
-        mov ebx, offset {msg}
-        mov ecx, {len}
-        call {print_string}
-        ret
-    ",
-        msg = sym STR,
-        len = const STR.len(),
-        print_string = sym print_string,
-    )
-}
-
-
-#[unsafe(naked)]
-#[unsafe(link_section = ".phys.text")]
-extern "C" fn junk64() {
-    naked_asm!(r"
-    .code64
-        mov rdi, offset {msg}
-        mov rsi, {len}
-        call {print_string64}
-        ret
-    ",
-        msg = sym STR,
-        len = const STR.len(),
-        print_string64 = sym print_string64,
-    )
-}
+// #[unsafe(naked)]
+// #[unsafe(link_section = ".phys.text")]
+// extern "C" fn junk() {
+//     naked_asm!(r"
+//     .code32
+//         mov ebx, offset {msg}
+//         mov ecx, {len}
+//         call {print_string}
+//         ret
+//     ",
+//         msg = sym STR,
+//         len = const STR.len(),
+//         print_string = sym print_string,
+//     )
+// }
+//
+//
+// #[unsafe(naked)]
+// #[unsafe(link_section = ".phys.text")]
+// extern "C" fn junk64() {
+//     naked_asm!(r"
+//     .code64
+//         mov rdi, offset {msg}
+//         mov rsi, {len}
+//         call {print_string64}
+//         ret
+//     ",
+//         msg = sym STR,
+//         len = const STR.len(),
+//         print_string64 = sym print_string64,
+//     )
+// }
 
 
 
@@ -456,14 +405,13 @@ pub extern "C" fn _start() -> ! {
 
             // TODO: Check for required features:
             //   - Large pages
-            //   - PCID
+            //   - invpcid
             //   - long mode
             //   - syscall
             // TODO: Check / clear CPU state. Make sure we're currently in 32 bit mode.
 
             call {common_init}
 
-            // call {junk}
             // This is awkward, but it works around a bug in the llvm linker in intel assembly mode.
             // The at&t syntax doesn't have this issue.
             push 0x8
@@ -473,7 +421,6 @@ pub extern "C" fn _start() -> ! {
     ",
         boot_stack_top = sym boot_stack_top,
         common_init = sym common_init,
-        junk = sym junk,
         _start64 = sym _start64,
     )
 }
@@ -487,13 +434,11 @@ extern "C" fn _start64() -> ! {
     // the physical memory map.
     naked_asm!(r"
         .code64
-            // call {junk64}
             mov rax, offset {_entry_64}
             jmp rax
     ",
         // jmp {_entry_64}
         _entry_64 = sym _entry_64,
-        junk64 = sym junk64,
     )
 }
 
@@ -504,7 +449,6 @@ extern "C" fn _start64() -> ! {
 extern "C" fn _entry_64() -> ! {
     naked_asm!(r"
         .code64
-            call {junk64}
             // Update stack pointer
             mov rax, 0xffffffff80000000
             add rsp, rax
@@ -526,7 +470,7 @@ extern "C" fn _entry_64() -> ! {
         kernel_stack = sym KERNEL_STACK,
         KERNEL_STACK_BITS = const KERNEL_STACK_BITS,
         boot_sys = sym boot_sys,
-        junk64 = sym junk64,
+        // junk64 = sym junk64,
     )
 }
 

@@ -34,10 +34,13 @@ struct KernelStack([[u8; 1 << KERNEL_STACK_BITS]; MAX_NUM_NODES]);
 pub(crate) static KERNEL_STACK: RacyCell<KernelStack> = RacyCell::new(KernelStack([[0; _]; _]));
 
 #[unsafe(link_section = ".boot.text")]
+#[unsafe(no_mangle)]
 pub(crate) extern "C" fn boot_sys(multiboot_magic: u32, mbi: *mut c_void) -> ! {
     let mut port = unsafe { SerialPort::init() };
 
-    port.write_str("hi from boot_sys!\n").unwrap();
+    write!(port, "Oh hi the number {}\n", 145).unwrap();
+
+    // port.write_str("hi from boot_sys!\n").unwrap();
     unsafe { asm!("hlt"); }
     loop {
     }
