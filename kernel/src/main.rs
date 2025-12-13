@@ -15,7 +15,20 @@ use core::panic::PanicInfo;
 
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    kprintln!("\n\nKERNEL PANIC! Aaaah!");
+    kprintln!("{}", info.message());
+
+    if let Some(location) = info.location() {
+        kprintln!("at {:?}", location);
+    } else {
+        kprintln!("Location unknown");
+    }
+
+    unsafe {
+        // Stop the machine.
+        asm!("hlt");
+    }
     loop {}
 }
 
@@ -38,29 +51,14 @@ pub(crate) static KERNEL_STACK: RacyCell<KernelStack> = RacyCell::new(KernelStac
 pub(crate) extern "C" fn boot_sys(_multiboot_magic: u32, _mbi: *mut c_void) -> ! {
     unsafe { init_serial() };
 
-
-    kprintln!("Hi from the kernel! {}", "oooohhhhh");
+    // kprintln!("Hi from the kernel! {}", "oooohhhhh");
 
     // write!(port, "Multiboot {:x}\n", multiboot_magic).unwrap();
 
-    panic!("oh nooo");
+    // panic!("oh nooo");
 
     // port.write_str("hi from boot_sys!\n").unwrap();
     unsafe { asm!("hlt"); }
     loop {
     }
 }
-
-
-
-
-// global_asm!(r#"
-//   .section .phys.text
-//   .code32
-//   .globl _start
-//   .align 4
-//         mov edi, eax
-//         mov esi, ebx
-//
-// _start:
-// "#);
