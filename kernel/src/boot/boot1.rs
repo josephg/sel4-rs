@@ -17,6 +17,12 @@ pub(crate) struct KernelStack([[u8; 1 << KERNEL_STACK_BITS]; MAX_NUM_NODES]);
 
 pub(crate) static KERNEL_STACK: RacyCell<KernelStack> = RacyCell::new(KernelStack([[0; _]; _]));
 
+#[unsafe(link_section = ".boot.text")]
+fn try_boot_sys() -> Result<(), ()> {
+
+    Ok(())
+}
+
 // This is called from entry_64 in boot0.
 #[unsafe(link_section = ".boot.text")]
 #[unsafe(no_mangle)]
@@ -26,6 +32,8 @@ pub extern "C" fn boot_sys(multiboot_magic: u32, _mbi: *mut c_void) -> ! {
     if multiboot_magic == MULTIBOOT_INFO_MAGIC {
         kprintln!("Booting via multiboot v1");
     }
+
+    try_boot_sys().unwrap();
 
     unsafe { asm!("hlt"); }
     loop {
