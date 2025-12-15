@@ -1,6 +1,6 @@
-use core::arch::asm;
+use crate::utils::halt;
+use crate::{kprintln, kprintln_big};
 use core::panic::PanicInfo;
-use crate::{kprintln_big};
 
 /// NOTE: Its only possible to print out the panic using core::fmt, which adds 60kb or so to the
 /// kernel size. I'm going to keep this giant size for now through the panic handler, but in the
@@ -11,7 +11,13 @@ use crate::{kprintln_big};
 /// and things like that, which is very useful during development.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    kprintln_big!("\n\nKERNEL PANIC! Aaaah!");
+    kprintln!("\n\nKERNEL PANIC! Aaaah!");
+
+    // For small builds, this removes about 20k of formatting infrastructure.
+    let msg = info.message();
+    // if let Some(s) = msg.as_str() {
+    //     kprintln!("{}", s);
+    // }
     kprintln_big!("{}", info.message());
 
     if let Some(location) = info.location() {
@@ -20,9 +26,5 @@ fn panic(info: &PanicInfo) -> ! {
         kprintln_big!("Location unknown");
     }
 
-    unsafe {
-        // Stop the machine.
-        asm!("hlt");
-    }
-    loop {}
+    halt();
 }
