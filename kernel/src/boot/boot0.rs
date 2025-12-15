@@ -6,7 +6,8 @@
 //! layout is much simpler!
 
 use core::arch::naked_asm;
-use super::boot1::{boot_sys, KERNEL_STACK, KERNEL_STACK_BITS};
+use crate::boot::stack::{KERNEL_STACK, KERNEL_STACK_BITS};
+use super::boot1::boot_sys;
 
 #[allow(dead_code)]
 unsafe extern "C" {

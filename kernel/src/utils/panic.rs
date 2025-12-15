@@ -14,7 +14,7 @@ fn panic(info: &PanicInfo) -> ! {
     kprintln!("\n\nKERNEL PANIC! Aaaah!");
 
     // For small builds, this removes about 20k of formatting infrastructure.
-    let msg = info.message();
+    // let msg = info.message();
     // if let Some(s) = msg.as_str() {
     //     kprintln!("{}", s);
     // }

@@ -3,5 +3,7 @@
 
 mod racycell;
 mod console;
-mod panic;
 mod boot;
+mod utils;
+mod basic_types;
+mod config;
