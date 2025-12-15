@@ -1,11 +1,17 @@
 use crate::basic_types::{CpuId, Paddr, PhysRegion};
-use crate::boot::multiboot::{MMapEntry, MultibootBootInfo, MultibootInfoFlags, MultibootModule, MultibootPtr, MultibootSlice, MULTIBOOT_BOOTLOADER_MAGIC};
+use crate::boot::multiboot::{MMapEntry, MMapType, MultibootBootInfo, MultibootInfoFlags, MultibootPtr, MULTIBOOT_BOOTLOADER_MAGIC};
 use crate::config::CONFIG_MAX_NUM_NODES;
 use crate::console::init_serial;
 use crate::kprintln;
 use crate::utils::fixedarr::FixedArr;
-use crate::utils::halt;
+use crate::utils::{halt, NumUtils};
 use ufmt::derive::uDebug;
+use crate::arch::constants::PAGE_BITS;
+use crate::hardware::PADDR_TOP;
+
+const SEL4_MULTIBOOT_MAX_MMAP_ENTRIES: usize = 50;
+
+const HIGHMEM_PADDR: usize = 0x100000;
 
 #[unsafe(link_section = ".boot.text")]
 fn try_boot_sys() -> Result<(), ()> {
@@ -37,6 +43,8 @@ fn try_boot_sys() -> Result<(), ()> {
 /// > do for now. Increase this value if the boot fails.
 const MAX_NUM_FREEMEM_REG: usize = 16;
 
+type MemPRegs = FixedArr<PhysRegion, MAX_NUM_FREEMEM_REG>;
+
 #[derive(uDebug)]
 struct BootState {
     /// region of available physical memory on platform
@@ -67,7 +75,7 @@ struct BootState {
 
     cpus: [CpuId; CONFIG_MAX_NUM_NODES],
 
-    mem_p_regs: FixedArr<PhysRegion, MAX_NUM_FREEMEM_REG>,
+    mem_p_regs: MemPRegs,
 
     // mem_p_regs_t mem_p_regs;  /* physical memory regions */
     // seL4_X86_BootInfo_VBE vbe_info; /* Potential VBE information from multiboot */
@@ -76,11 +84,83 @@ struct BootState {
 }
 
 #[unsafe(link_section = ".boot.text")]
-fn parse_mem_map(mmaps: &[MMapEntry]) -> Result<(), ()> {
-    kprintln!("Parsing GRUB physical memory maps...");
-    for m in mmaps {
-
+fn add_mem_phys_regs(mem_p_regs: &mut MemPRegs, mut reg: PhysRegion) -> Result<(), ()> {
+    if reg.start == reg.end {
+        // This nonsensical comment from SeL4:
+        // > Return true here if asked to add an empty region.
+        // > Some of the callers round down the end address to
+        return Ok(())
     }
+
+    if reg.end > PADDR_TOP && reg.start > PADDR_TOP {
+        // it's not an error for there to exist memory outside the kernel window,
+        // we're just going to ignore it and leave it to be given out as device memory.
+        return Ok(())
+    }
+
+    if reg.end > PADDR_TOP {
+        assert!(reg.start <= PADDR_TOP); // Should be guaranteed from above.
+        // Clamp a region to the top of the kernel window if it extends beyond.
+        reg.end = PADDR_TOP;
+    }
+
+    match mem_p_regs.try_push(reg) {
+        Ok(()) => {
+            kprintln!("Added physical memory region 0x{:x} - 0x{:x}", reg.start, reg.end);
+        }
+        Err(_) => {
+            kprintln!("Warning: Dropping memory region 0x{:x} - 0x{:x}. Try increasing MAX_NUM_FREEMEM_REG", reg.start, reg.end)
+        }
+    }
+
+    Ok(())
+}
+
+/// SAFETY: We're going to do a bunch of raw memory reads based on the passed multiboot pointers.
+/// This function is only correct if these pointers are valid.
+#[unsafe(link_section = ".boot.text")]
+unsafe fn parse_mem_map(mem_p_regs: &mut MemPRegs, bytelen: u32, base_addr: MultibootPtr<MMapEntry>) -> Result<(), ()> {
+    // Annoyingly, the mmap table is technically a table of dynamically sized elements. In practice,
+    // qemu and grub both seem to only produce items of exactly 20 bytes. But for correctness, I'm
+    // going to walk the table in a way thats actually correct (according to the spec) here.
+    //
+    // Things are about to get *unsafe*.
+    kprintln!("Parsing GRUB physical memory map...");
+    let mut addr = base_addr;
+    while addr.0 < base_addr.0 + bytelen {
+        let ptr = addr.as_ptr();
+        let m = unsafe { *ptr };
+
+        let mem_start = m.base_addr;
+        let mem_len = m.len;
+        let m_type = m.mtype;
+
+        // The SeL4 code at this location has this check:
+        //         if (mem_start != (uint64_t)(word_t)mem_start) { ... }
+        // But this is impossible to trip in 64 bit mode. (And the compiler agrees and compiles it
+        // out). Given I don't plan to add 32 bit support here, I'm leaving this check out.
+
+        kprintln!("\tPhysical memory region from {:x} size {:x} type {}", mem_start, mem_len, m_type);
+
+        if m_type == MMapType::Usable as _
+            && mem_start as usize >= HIGHMEM_PADDR
+            && mem_len >= u64::bit(PAGE_BITS)
+        {
+            let reg = PhysRegion {
+                start: mem_start.round_up(PAGE_BITS) as _,
+                end: (mem_start + mem_len).round_down(PAGE_BITS) as _,
+            };
+            add_mem_phys_regs(mem_p_regs, reg)?;
+        }
+
+        // Advance the loop.
+        addr.0 += m.size + size_of::<u32>() as u32;
+    }
+
+
+    //
+    //     kprintln!("\tPhysical memory region from {:x} size {:x} type {} xxsize: {}", mem_start, mem_len, m_type, size);
+    // }
 
     Ok(())
 }
@@ -116,7 +196,7 @@ fn try_boot_sys_mbi1(mbi: &MultibootBootInfo) -> Result<BootState, ()> {
     // kprintln!("modules: {:?}", modules);
     for m in modules {
         let name = unsafe { m.name.as_cstr(mbi) };
-        kprintln!("Mod {}: {:?}", name.unwrap().to_str().unwrap(), m);
+        kprintln!("\tmod {}: {:?}", name.unwrap().to_str().unwrap(), m);
 
         if m.mod_end < m.mod_start {
             kprintln!("Invalid boot module size!");
@@ -132,10 +212,10 @@ fn try_boot_sys_mbi1(mbi: &MultibootBootInfo) -> Result<BootState, ()> {
     // not give to the user. Memory regions that must not be given to the user
     // include all the physical memory in the kernel window, but also includes any
     // important or kernel devices.
-    let mut mem_p_regs: FixedArr<PhysRegion, MAX_NUM_FREEMEM_REG> = FixedArr::new();
+    let mut mem_p_regs: MemPRegs = MemPRegs::new();
 
     if mbi.flags & (MultibootInfoFlags::MemMap as u32) != 0 {
-        parse_mem_map(unsafe { mbi.mmap.to_slice(&mbi) })?;
+        unsafe { parse_mem_map(&mut mem_p_regs, mbi.mmap_bytelength, mbi.mmap_addr) }?;
     } else {
         todo!("old way")
     }
@@ -160,7 +240,7 @@ fn try_boot_sys_mbi1(mbi: &MultibootBootInfo) -> Result<BootState, ()> {
 // This is called from entry_64 in boot0.
 #[unsafe(link_section = ".boot.text")]
 #[unsafe(no_mangle)]
-pub extern "C" fn boot_sys(multiboot_magic: u32, mbi: MultibootPtr) -> ! {
+pub extern "C" fn boot_sys(multiboot_magic: u32, mbi: u32) -> ! {
     // init_serial is called once at the start of the boot process before we use the serial console.
     // This is used for debug messages.
     unsafe { init_serial() };

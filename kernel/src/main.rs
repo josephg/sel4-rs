@@ -1,9 +1,12 @@
 #![no_std]
 #![no_main]
+#![allow(unused)]
 
-mod racycell;
-mod console;
+pub mod racycell;
+pub mod console;
 mod boot;
-mod utils;
+pub mod utils;
 mod basic_types;
-mod config;
+pub mod config;
+pub mod arch;
+mod hardware;

@@ -104,8 +104,18 @@ pub(super) enum MultibootInfoFlags {
     FramebufferInfo = 0x1000,
 }
 
-// TODO: Probably better to make a newtype for this
-pub(super) type MultibootPtr = u32;
+#[derive(Copy, Clone)]
+#[repr(transparent)]
+pub(super) struct MultibootPtr<T>(pub u32, PhantomData<T>);
+
+impl<T> MultibootPtr<T> {
+    /// Get the raw pointer out. Note this is safe. Its only potentially unsafe to dereference the
+    /// pointer.
+    pub fn as_ptr(self) -> *const T {
+        // Extra coersion probably unnecessary.
+        self.0 as usize as *const T
+    }
+}
 
 #[derive(uDebug, Copy, Clone)]
 #[repr(transparent)]
@@ -135,15 +145,11 @@ impl CStr32 {
     }
 }
 
-// TODO: For safety, consider removing copy & clone to make sure the rust slice generated has the
-// correct lifetime here.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub(super) struct MultibootSlice<T> {
     pub len: u32,
-    pub addr: MultibootPtr,
-
-    _data: PhantomData<T>,
+    pub addr: MultibootPtr<T>,
 
     // Could add PhantomData of type T to make coercing more safe?
 }
@@ -154,12 +160,36 @@ impl<T> MultibootSlice<T> {
     /// This function takes a container object as a parameter. The lifetime of the container object
     /// is used as the lifetime of the returned cstr.
     pub unsafe fn to_slice<P>(self, _container: &P) -> &[T] {
-        let ptr = self.addr as usize as *const T;
+        let ptr = self.addr.as_ptr();
         unsafe {
             core::slice::from_raw_parts(ptr, self.len as usize)
         }
     }
 }
+
+/// Some slices in the struct use a count of the items. Some use the byte length. Bleh.
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub(super) struct MultibootByteLenSlice<T> {
+    pub byte_len: u32,
+    pub addr: MultibootPtr<T>,
+
+    // Could add PhantomData of type T to make coercing more safe?
+}
+
+impl<T> MultibootByteLenSlice<T> {
+    /// SAFETY: This is only safe if all 3 parameters (len, addr and type) are valid.
+    ///
+    /// This function takes a container object as a parameter. The lifetime of the container object
+    /// is used as the lifetime of the returned cstr.
+    pub unsafe fn to_slice<P>(self, _container: &P) -> &[T] {
+        let ptr = self.addr.as_ptr();
+        unsafe {
+            core::slice::from_raw_parts(ptr, self.byte_len as usize / size_of::<T>())
+        }
+    }
+}
+
 
 // The symbol table information is unused. We could parse it anyway, but then we'd need to deal with
 // unions. And ditching it allows the multiboot info to impl Debug.
@@ -202,7 +232,7 @@ pub(crate) struct MultibootBootInfo {
     /// "Root" partition
     pub boot_device: u32,
     /// Kernel command line
-    pub cmdline: MultibootPtr,
+    pub cmdline: CStr32,
 
     /// Boot module list
     pub mods: MultibootSlice<MultibootModule>,
@@ -214,27 +244,30 @@ pub(crate) struct MultibootBootInfo {
     // Unused symbol table information.
     _syms: [u32; 4],
 
-    /// Memory mapping buffer
-    pub mmap: MultibootSlice<MMapEntry>,
+    /// Memory mapping buffer. According to the multiboot spec, the mmap table has entries of
+    /// arbitrary size. So this requires some care in parsing.
+    // pub mmap: MultibootByteLenSlice<MMapEntry>,
+    pub mmap_bytelength: u32,
+    pub mmap_addr: MultibootPtr<MMapEntry>,
 
     /// Drive info buffer
     pub drives: MultibootSlice<()>,
 
     /// ROM configuration table
-    pub config_table: MultibootPtr,
+    pub config_table: MultibootPtr<()>,
 
     /// Boot loader name
-    pub boot_loader_name: MultibootPtr,
+    pub boot_loader_name: MultibootPtr<()>,
 
     /// APM table
-    pub apm_table: MultibootPtr,
+    pub apm_table: MultibootPtr<()>,
 
     // The following fields could probably be more cleanly broken into their own structs, but
     // doing it like this matches the definition in the multiboot spec.
 
     // Video
-    pub vbe_control_info: MultibootPtr,
-    pub vbe_mode_info: MultibootPtr,
+    pub vbe_control_info: MultibootPtr<()>,
+    pub vbe_mode_info: MultibootPtr<()>,
     pub vbe_mode: u16,
     pub vbe_interface_seg: u16,
     pub vbe_interface_off: u16,
@@ -286,10 +319,22 @@ pub(crate) struct MultibootBootInfo {
 #[derive(Copy, Clone)]
 #[repr(C, packed)]
 pub(super) struct MMapEntry {
-    size: u32,
-    addr: u64,
-    len: u64,
-    mtype: u32,
+    pub size: u32,
+    pub base_addr: u64,
+    pub len: u64,
+    pub mtype: u32,
+}
+
+#[derive(uDebug, Copy, Clone)]
+#[repr(u32)]
+pub enum MMapType {
+    Usable = 1,
+    Reserved = 2,
+    Acpi = 3,
+    /// Reserved memory which needs to be preserved on hibernation
+    AcpiNvs = 4,
+    /// Memory occupied by defective RAM modules
+    Bad = 5,
 }
 
 #[derive(uDebug, Copy, Clone)]

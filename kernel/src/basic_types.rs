@@ -38,21 +38,21 @@ pub type Timestamp = u64;
  */
 #[derive(uDebug, Default, Copy, Clone)]
 pub struct Region {
-    start: Pptr,
-    end: Pptr,
+    pub start: Pptr,
+    pub end: Pptr,
 }
 
 /** A region [start..end) of physical memory addresses. */
 #[derive(uDebug, Default, Copy, Clone)]
 pub struct PhysRegion {
-    start: Paddr,
-    end: Paddr,
+    pub start: Paddr,
+    pub end: Paddr,
 }
 
 /** A region [start..end) of user-virtual addresses. */
 #[derive(uDebug, Default, Copy, Clone)]
 pub struct VirtRegion {
-    start: VirtPtr,
-    end: VirtPtr,
+    pub start: VirtPtr,
+    pub end: VirtPtr,
 }
 
