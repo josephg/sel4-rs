@@ -1,5 +1,5 @@
 use crate::basic_types::{CpuId, Paddr, PhysRegion};
-use crate::boot::multiboot::{MMapEntry, MMapType, MultibootBootInfo, MultibootInfoFlags, MultibootPtr, MULTIBOOT_BOOTLOADER_MAGIC};
+use crate::arch::x86_64::boot::multiboot::{MMapEntry, MMapType, MultibootBootInfo, MultibootInfoFlags, MultibootPtr, MULTIBOOT_BOOTLOADER_MAGIC};
 use crate::config::CONFIG_MAX_NUM_NODES;
 use crate::console::init_serial;
 use crate::kprintln;
@@ -118,6 +118,8 @@ fn add_mem_phys_regs(mem_p_regs: &mut MemPRegs, mut reg: PhysRegion) -> Result<(
 
 /// SAFETY: We're going to do a bunch of raw memory reads based on the passed multiboot pointers.
 /// This function is only correct if these pointers are valid.
+///
+/// We're relying on GRUB providing correct information about the physical memory regions here.
 #[unsafe(link_section = ".boot.text")]
 unsafe fn parse_mem_map(mem_p_regs: &mut MemPRegs, bytelen: u32, base_addr: MultibootPtr<MMapEntry>) -> Result<(), ()> {
     // Annoyingly, the mmap table is technically a table of dynamically sized elements. In practice,
@@ -156,11 +158,6 @@ unsafe fn parse_mem_map(mem_p_regs: &mut MemPRegs, bytelen: u32, base_addr: Mult
         // Advance the loop.
         addr.0 += m.size + size_of::<u32>() as u32;
     }
-
-
-    //
-    //     kprintln!("\tPhysical memory region from {:x} size {:x} type {} xxsize: {}", mem_start, mem_len, m_type, size);
-    // }
 
     Ok(())
 }
@@ -216,6 +213,8 @@ fn try_boot_sys_mbi1(mbi: &MultibootBootInfo) -> Result<BootState, ()> {
 
     if mbi.flags & (MultibootInfoFlags::MemMap as u32) != 0 {
         unsafe { parse_mem_map(&mut mem_p_regs, mbi.mmap_bytelength, mbi.mmap_addr) }?;
+
+
     } else {
         todo!("old way")
     }

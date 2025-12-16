@@ -75,7 +75,7 @@ pub const MULTIBOOT_BOOTLOADER_MAGIC: u32 = 0x2BADB002;
 #[derive(uDebug, Copy, Clone)]
 #[repr(u32)]
 #[allow(unused)]
-pub(super) enum MultibootInfoFlags {
+pub(crate) enum MultibootInfoFlags {
     /// is there basic lower/upper memory information?
     Memory = 0x1,
     // /// is there a boot device set?
@@ -106,7 +106,7 @@ pub(super) enum MultibootInfoFlags {
 
 #[derive(Copy, Clone)]
 #[repr(transparent)]
-pub(super) struct MultibootPtr<T>(pub u32, PhantomData<T>);
+pub(crate) struct MultibootPtr<T>(pub u32, PhantomData<T>);
 
 impl<T> MultibootPtr<T> {
     /// Get the raw pointer out. Note this is safe. Its only potentially unsafe to dereference the
@@ -119,7 +119,7 @@ impl<T> MultibootPtr<T> {
 
 #[derive(uDebug, Copy, Clone)]
 #[repr(transparent)]
-pub(super) struct CStr32(u32);
+pub(crate) struct CStr32(u32);
 
 impl CStr32 {
     /// SAFETY:
@@ -147,7 +147,7 @@ impl CStr32 {
 
 #[derive(Copy, Clone)]
 #[repr(C)]
-pub(super) struct MultibootSlice<T> {
+pub(crate) struct MultibootSlice<T> {
     pub len: u32,
     pub addr: MultibootPtr<T>,
 
@@ -170,7 +170,7 @@ impl<T> MultibootSlice<T> {
 /// Some slices in the struct use a count of the items. Some use the byte length. Bleh.
 #[derive(Copy, Clone)]
 #[repr(C)]
-pub(super) struct MultibootByteLenSlice<T> {
+pub(crate) struct MultibootByteLenSlice<T> {
     pub byte_len: u32,
     pub addr: MultibootPtr<T>,
 
@@ -318,7 +318,7 @@ pub(crate) struct MultibootBootInfo {
 
 #[derive(Copy, Clone)]
 #[repr(C, packed)]
-pub(super) struct MMapEntry {
+pub(crate) struct MMapEntry {
     pub size: u32,
     pub base_addr: u64,
     pub len: u64,
@@ -339,7 +339,7 @@ pub enum MMapType {
 
 #[derive(uDebug, Copy, Clone)]
 #[repr(C)]
-pub(super) struct MultibootModule {
+pub(crate) struct MultibootModule {
     /// the memory used goes from bytes ’mod_start’ to ’mod_end-1’ inclusive
     pub mod_start: u32,
     pub mod_end: u32,

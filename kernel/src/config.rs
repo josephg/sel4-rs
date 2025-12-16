@@ -12,3 +12,8 @@ pub const CONFIG_MAX_NUM_NODES: usize = 32;
 /// will detect IOAPICs regardless of whether the IOAPIC will actually be used as
 /// the final IRQ controller.
 pub const CONFIG_MAX_NUM_IOAPIC: usize = 1;
+
+/// This describes the log2 size of the kernel stack. Great care should be taken as
+/// there is no guard below the stack so setting this too small will cause random
+/// memory corruption
+pub(crate) const CONFIG_KERNEL_STACK_BITS: u32 = 12;

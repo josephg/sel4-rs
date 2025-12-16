@@ -2,11 +2,11 @@
 #![no_main]
 #![allow(unused)]
 
-pub mod racycell;
-pub mod console;
-mod boot;
-pub mod utils;
-mod basic_types;
-pub mod config;
-pub mod arch;
-mod hardware;
+pub(crate) mod racycell;
+pub(crate) mod console;
+pub(crate) mod utils;
+pub(crate) mod basic_types;
+pub(crate) mod config;
+pub(crate) mod arch;
+pub(crate) mod hardware;
+pub(crate) mod stack;

@@ -6,8 +6,9 @@
 //! layout is much simpler!
 
 use core::arch::naked_asm;
-use crate::boot::stack::{KERNEL_STACK, KERNEL_STACK_BITS};
 use super::boot1::boot_sys;
+use crate::stack::KERNEL_STACK;
+use crate::config::CONFIG_KERNEL_STACK_BITS;
 
 #[allow(dead_code)]
 unsafe extern "C" {
@@ -472,7 +473,7 @@ extern "C" fn entry64() -> ! {
             jmp {boot_sys}
     ",
         kernel_stack = sym KERNEL_STACK,
-        KERNEL_STACK_BITS = const KERNEL_STACK_BITS,
+        KERNEL_STACK_BITS = const CONFIG_KERNEL_STACK_BITS,
         boot_sys = sym boot_sys,
         // junk64 = sym junk64,
     )
