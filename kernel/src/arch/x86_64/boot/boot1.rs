@@ -1,12 +1,20 @@
-use crate::basic_types::{CpuId, Paddr, PhysRegion};
-use crate::arch::x86_64::boot::multiboot::{MMapEntry, MMapType, MultibootBootInfo, MultibootInfoFlags, MultibootPtr, MULTIBOOT_BOOTLOADER_MAGIC};
-use crate::config::CONFIG_MAX_NUM_NODES;
+//! This file is largely based on kernel/src/arch/x86/kernel/boot_sys.c
+//!
+//! It is the second part of the boot process (after boot0). This reads multiboot state to prepare
+//! for the next stage of booting.
+//!
+//! Notably, [boot_sys] in this file is jumped to directly from the assembly code in boot0 after
+//! setting up the kernel stack.
+
+use crate::basic_types::{Paddr, PhysRegion};
+use crate::arch::x86_64::boot::multiboot::{MMapEntry, MMapType, MultibootBootInfo, MultibootInfoFlags, MULTIBOOT_BOOTLOADER_MAGIC};
 use crate::console::init_serial;
-use crate::kprintln;
-use crate::utils::fixedarr::FixedArr;
+use crate::{kpanic, kprintln};
 use crate::utils::{halt, NumUtils};
-use ufmt::derive::uDebug;
 use crate::arch::constants::PAGE_BITS;
+use crate::arch::x86_64::acpi::acpi_init;
+use crate::arch::x86_64::boot::bootinfo::{BootState, MemPRegs, MAX_NUM_FREEMEM_REG};
+use crate::arch::x86_64::U32Ptr;
 use crate::hardware::PADDR_TOP;
 
 const SEL4_MULTIBOOT_MAX_MMAP_ENTRIES: usize = 50;
@@ -31,58 +39,8 @@ fn try_boot_sys() -> Result<(), ()> {
 // }
 
 
-/// The maximum number of reserved regions.
-///
-/// This is simply set to 16 because thats the value in include/arch/x86/arch. The arm code has
-/// more complex logic to calculate this, but 16 is probably fine.
-///
-/// Here's a comment from the riscv code (which also just arbitrarily picks 16):
-///
-/// > The value for the max number of free memory region is basically an arbitrary
-/// > choice. We could calculate the exact number, but just picking 16 will also
-/// > do for now. Increase this value if the boot fails.
-const MAX_NUM_FREEMEM_REG: usize = 16;
-
-type MemPRegs = FixedArr<PhysRegion, MAX_NUM_FREEMEM_REG>;
-
-#[derive(uDebug)]
-struct BootState {
-    /// region of available physical memory on platform
-    avail_p_reg: PhysRegion,
-    /// region containing the kernel image
-    kern_p_reg: PhysRegion,
-
-    // ui_info_t    ui_info;     /* info about userland images */
-
-    /// Number of IOAPICs detected
-    num_ioapic: u32,
-
-    // paddr_t      ioapic_paddr[CONFIG_MAX_NUM_IOAPIC];
-    // uint32_t     num_drhu; /* number of IOMMUs */
-    // paddr_t      drhu_list[MAX_NUM_DRHU]; /* list of physical addresses of the IOMMUs */
-    // acpi_rmrr_list_t rmrr_list;
-    // acpi_rsdp_t  acpi_rsdp; /* copy of the rsdp */
-
-    /// physical address where boot modules end
-    mods_end_paddr: Paddr,
-    /// physical address of first boot module
-    boot_module_start: Paddr,
-    /// number of detected cpus
-    num_cpus: u32,
-
-    /// lower memory size for boot code of APs to run in real mode
-    mem_lower: u32,
-
-    cpus: [CpuId; CONFIG_MAX_NUM_NODES],
-
-    mem_p_regs: MemPRegs,
-
-    // mem_p_regs_t mem_p_regs;  /* physical memory regions */
-    // seL4_X86_BootInfo_VBE vbe_info; /* Potential VBE information from multiboot */
-    // seL4_X86_BootInfo_mmap_t mb_mmap_info; /* memory map information from multiboot */
-    // seL4_X86_BootInfo_fb_t fb_info; /* framebuffer information as set by bootloader */
-}
-
+/// Add the passed physical memory region to mem_p_regs. mem_p_regs is fixed size. This function
+/// returns an error if we run out of room in the array - though this should be vanishingly rare.
 #[unsafe(link_section = ".boot.text")]
 fn add_mem_phys_regs(mem_p_regs: &mut MemPRegs, mut reg: PhysRegion) -> Result<(), ()> {
     if reg.start == reg.end {
@@ -107,21 +65,24 @@ fn add_mem_phys_regs(mem_p_regs: &mut MemPRegs, mut reg: PhysRegion) -> Result<(
     match mem_p_regs.try_push(reg) {
         Ok(()) => {
             kprintln!("Added physical memory region 0x{:x} - 0x{:x}", reg.start, reg.end);
+            Ok(())
         }
         Err(_) => {
-            kprintln!("Warning: Dropping memory region 0x{:x} - 0x{:x}. Try increasing MAX_NUM_FREEMEM_REG", reg.start, reg.end)
+            kprintln!("Warning: Dropping memory region 0x{:x} - 0x{:x}. Try increasing MAX_NUM_FREEMEM_REG", reg.start, reg.end);
+            Err(())
         }
     }
-
-    Ok(())
 }
 
 /// SAFETY: We're going to do a bunch of raw memory reads based on the passed multiboot pointers.
 /// This function is only correct if these pointers are valid.
 ///
 /// We're relying on GRUB providing correct information about the physical memory regions here.
+///
+/// Returns Ok if all memory regions populated. Or Err if we ran out of space for regions in
+/// mem_p_regs.
 #[unsafe(link_section = ".boot.text")]
-unsafe fn parse_mem_map(mem_p_regs: &mut MemPRegs, bytelen: u32, base_addr: MultibootPtr<MMapEntry>) -> Result<(), ()> {
+unsafe fn parse_mem_map(mem_p_regs: &mut MemPRegs, bytelen: u32, base_addr: U32Ptr<MMapEntry>) -> Result<(), ()> {
     // Annoyingly, the mmap table is technically a table of dynamically sized elements. In practice,
     // qemu and grub both seem to only produce items of exactly 20 bytes. But for correctness, I'm
     // going to walk the table in a way thats actually correct (according to the spec) here.
@@ -162,6 +123,9 @@ unsafe fn parse_mem_map(mem_p_regs: &mut MemPRegs, bytelen: u32, base_addr: Mult
     Ok(())
 }
 
+/// This function creates and populates a BootState object on the stack. In SeL4 this happens in
+/// static memory - which might be to reduce stack pressure? Anyway, its certainly cleaner rust code
+/// like this.
 #[unsafe(link_section = ".boot.text")]
 fn try_boot_sys_mbi1(mbi: &MultibootBootInfo) -> Result<BootState, ()> {
     // TODO: Boot command line. Not sure if I ever want to support this, but its certainly in sel4.
@@ -180,19 +144,23 @@ fn try_boot_sys_mbi1(mbi: &MultibootBootInfo) -> Result<BootState, ()> {
         return Err(());
     }
 
-    if mbi.mods.len < 1 {
-        kprintln!("Expected at least 1 boot module (passed as initrd) for root process");
-        return Err(());
-    }
-
     kprintln!("Detected {} boot module(s)", mbi.mods.len);
 
     let mut mods_end_paddr = 0;
 
     let modules = unsafe { mbi.mods.to_slice(mbi) };
     // kprintln!("modules: {:?}", modules);
+
+    let Some(first_module) = modules.first() else {
+        kprintln!("Expected at least 1 boot module (passed as initrd) for root process");
+        return Err(());
+    };
+
+    // This is the entrypoint we jump to after initializing SeL4.
+    let boot_module_start = first_module.mod_start as usize;
+
     for m in modules {
-        let name = unsafe { m.name.as_cstr(mbi) };
+        let name = unsafe { m.name.try_as_cstr(mbi) };
         kprintln!("\tmod {}: {:?}", name.unwrap().to_str().unwrap(), m);
 
         if m.mod_end < m.mod_start {
@@ -212,29 +180,86 @@ fn try_boot_sys_mbi1(mbi: &MultibootBootInfo) -> Result<BootState, ()> {
     let mut mem_p_regs: MemPRegs = MemPRegs::new();
 
     if mbi.flags & (MultibootInfoFlags::MemMap as u32) != 0 {
-        unsafe { parse_mem_map(&mut mem_p_regs, mbi.mmap_bytelength, mbi.mmap_addr) }?;
+        // This will return an error if we ran out of room to store the list of memory regions.
+        let result = unsafe {
+            parse_mem_map(&mut mem_p_regs, mbi.mmap_bytelength, mbi.mmap_addr)
+        };
+        if let Err(()) = result {
+            // kprintln!("Warning: Multiboot has reported more memory map entries \
+            //        than the max amount that will be passed in the bootinfo, {}. \
+            //        These extra regions will still be turned into untyped caps.",
+            // MAX_NUM_FREEMEM_REG);
+            // TODO: Actually match sel4's behaviour here. The current kernel saves this data and
+            // passes it more or less directly into the root process's extra_bi region. But because
+            // the might be weird extra stuff in here, I want to think a little bit more before
+            // committing to that.
 
-
+            kprintln!("Warning: Multiboot has reported more memory map entries \
+                than the max amount that will be passed in the bootinfo, {}. \
+                Extra entries are not available for use.",
+                MAX_NUM_FREEMEM_REG
+            );
+        }
+        // TODO: SeL4 also copies map entries into boot_state.mb_mmap_info.mmap.
     } else {
-        todo!("old way")
+        // "Calculate memory the old way"
+        // NOTE: This code has been hand ported from SeL4, but it has not been tested yet. That
+        // makes me deeply uneasy.
+        let start = HIGHMEM_PADDR;
+        let avail = PhysRegion {
+            start,
+            end: (start + ((mbi.mem_upper as usize) << 10)).round_down(PAGE_BITS)
+        };
+        add_mem_phys_regs(&mut mem_p_regs, avail)?;
     }
 
+    if mbi.flags & (MultibootInfoFlags::VBEInfo as u32) != 0 {
+        // TODO: SeL4 passes VBE info to boot info struct. Since qemu doesn't seem to support any
+        // of the multiboot graphics mode stuff, I'm going to ignore it for now.
+        kprintln!("Warning: got VBE info from multiboot, but currently ignored.");
+    } else {
+        kprintln!("Multiboot gave us no video information");
+    }
+
+    let acpi_rsdp = acpi_init()?;
 
     // todo!()
     Ok(BootState {
         avail_p_reg: Default::default(),
         kern_p_reg: Default::default(),
         num_ioapic: 0,
+        acpi_rsdp,
         mods_end_paddr,
-        boot_module_start: 0,
+        boot_module_start,
         num_cpus: 0,
-        mem_lower: 0,
+        mem_lower: mbi.mem_lower,
         cpus: Default::default(),
         mem_p_regs,
     })
-
 }
 
+
+// pub fn vga_write_str(s: &str) {
+//     let vga = 0xb8000 as *mut u8;
+//     static mut COL: usize = 0;
+//     static mut ROW: usize = 0;
+//     let width = 80;
+//
+//     for b in s.bytes() {
+//         unsafe {
+//             match b {
+//                 b'\n' => { ROW += 1; COL = 0; }
+//                 _ => {
+//                     let i = (ROW * width + COL) * 2;
+//                     core::ptr::write_volatile(vga.add(i), b);       // char
+//                     core::ptr::write_volatile(vga.add(i + 1), 0x05); // attr: light grey on black
+//                     COL += 1;
+//                     if COL >= width { ROW += 1; COL = 0; }
+//                 }
+//             }
+//         }
+//     }
+// }
 
 // This is called from entry_64 in boot0.
 #[unsafe(link_section = ".boot.text")]
@@ -266,8 +291,7 @@ pub extern "C" fn boot_sys(multiboot_magic: u32, mbi: u32) -> ! {
         // kprintln!("Multiboot info: {:#?}", mbi);
 
         if let Err(()) = try_boot_sys_mbi1(mbi) {
-            kprintln!("Multiboot returned unexpected or unusable data.");
-            halt();
+            kpanic!("Multiboot returned unexpected or unusable data.");
         }
 
     }

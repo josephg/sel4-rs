@@ -35,7 +35,7 @@ impl uWrite for DebugConsole {
 #[macro_export]
 macro_rules! kprint {
     ($($arg:tt)*) => {{
-        let port = unsafe { crate::console::DEBUG_PORT.get_mut() };
+        let port = unsafe { $crate::console::DEBUG_PORT.get_mut() };
         ufmt::uwrite!(port, $($arg)*);
     }};
 }
@@ -44,17 +44,28 @@ macro_rules! kprint {
 macro_rules! kprintln {
     () => { $crate::console::kprint!("\n") };
     ($($arg:tt)*) => {{
-        let port = unsafe { crate::console::DEBUG_PORT.get_mut() };
+        let port = unsafe { $crate::console::DEBUG_PORT.get_mut() };
         ufmt::uwriteln!(port, $($arg)*);
+    }};}
 
-        // $crate::console::serial_print(format_args!($($arg)*));
-        // $crate::console::serial_print(format_args!("\n"));
+/// Print a message and halt the computer. panic!() will also work, but this adds much less binary
+/// size thanks to uDebug.
+#[macro_export]
+macro_rules! kpanic {
+    () => { $crate::console::kprint!("\n") };
+    ($($arg:tt)*) => {{
+        let port = unsafe { $crate::console::DEBUG_PORT.get_mut() };
+        ufmt::uwriteln!(port, $($arg)*);
+        $crate::utils::halt();
     }};}
 
 
-
-
-
+// It'd be nice to skip implementing fmt::Write entirely, because adding this code brings in all
+// of rust's formatting infrastructure. Unfortunately, there's no current way to print out panic
+// messages without using core::fmt::Arguments and everything that comes along with it.
+//
+// Maybe at some point I'll put all this stuff behind a feature flag, so you can build the kernel
+// into a tiny binary but with worse panic messages. Sadly I don't think most people care.
 impl core::fmt::Write for DebugConsole {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         for byte in s.bytes() {

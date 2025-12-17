@@ -6,9 +6,10 @@
 //! I also don't have a multiboot2 header here. Could add it when I work on bare metal support. But
 //! for now, Qemu doesn't support multiboot2. So it won't add much.
 
-use core::ffi::{c_char, CStr};
-use core::marker::PhantomData;
 use ufmt::derive::uDebug;
+use crate::arch::x86_64::{CStr32, U32Ptr};
+use crate::config::{ConfigGraphicsMode, CONFIG_MULTIBOOT_GRAPHICS_MODE};
+use crate::const_assert;
 
 #[repr(C)]
 #[repr(align(8))]
@@ -18,9 +19,26 @@ struct MultibootHeader {
     /// Feature flags (see [MultibootFlags])
     flags: u32,
     checksum: u32,
-    padding: u32,
 
-    // This struct has more headers if AOutKludge or VideoMode is passed.
+    // The following fields only get read for non-ELF file kernels. (If AoutKludge flag is passed)
+    binary_header_addr: u32,
+    binary_load_addr: u32,
+    binary_load_end_addr: u32,
+    binary_bss_end_addr: u32,
+    binary_entry_addr: u32,
+
+    // Video info. These fields are only read if the VideoMode flag is passed.
+
+    /// Contains 0 for linear graphics mode or 1 for EGA-standard text mode.
+    /// Note that the boot loader may set a text mode even if this field contains ‘0’, or set a
+    /// video mode even if this field contains ‘1’.
+    graphics_mode_type: u32,
+    /// Requested number of columns. 0 for no preference.
+    graphics_width: u32,
+    /// Requested number of lines. 0 for no preference.
+    graphics_height: u32,
+    /// Requested number of bits per pixel in graphics mode. 0 for no preference.
+    graphics_depth: u32,
 }
 
 // This would be nicer using bitflags crate.
@@ -39,9 +57,19 @@ enum MultibootFlags {
 }
 
 const MULTIBOOT_HEADER_MAGIC: u32 = 0x1BADB002;
-const FLAGS: u32 = (MultibootFlags::AlignModules as u32)
-    | (MultibootFlags::MemoryInfo as u32);
 
+/// Returns (flag, mode).
+const fn gfx_flags() -> (u32, u32) {
+    match CONFIG_MULTIBOOT_GRAPHICS_MODE {
+        ConfigGraphicsMode::None => (0, 0),
+        ConfigGraphicsMode::Text => (MultibootFlags::VideoMode as u32, 0),
+        ConfigGraphicsMode::Linear => (MultibootFlags::VideoMode as u32, 1),
+    }
+}
+
+const FLAGS: u32 = (MultibootFlags::AlignModules as u32)
+    | (MultibootFlags::MemoryInfo as u32)
+    | gfx_flags().0;
 
 /// This is linked as static data within the binary so multiboot knows how to boot our kernel.
 #[unsafe(no_mangle)]
@@ -50,17 +78,42 @@ static MULTIBOOT_HEADER: MultibootHeader = MultibootHeader {
     magic: MULTIBOOT_HEADER_MAGIC,
     flags: FLAGS,
     checksum: u32::MAX - FLAGS - MULTIBOOT_HEADER_MAGIC + 1,
-    padding: 0,
+
+    binary_header_addr: 0,
+    binary_load_addr: 0,
+    binary_load_end_addr: 0,
+    binary_bss_end_addr: 0,
+    binary_entry_addr: 0,
+
+    graphics_mode_type: gfx_flags().1,
+    graphics_width: 0,
+    graphics_height: 0,
+    graphics_depth: 0,
 };
 
 
 
-// TODO: Hoist this into a utils library or something.
-macro_rules! const_assert {
-    ($condition:expr) => {
-        #[allow(unknown_lints, clippy::eq_op)]
-        const _: () = assert!($condition);
-    };
+
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub(crate) struct MultibootSlice<T> {
+    pub len: u32,
+    pub addr: U32Ptr<T>,
+
+    // Could add PhantomData of type T to make coercing more safe?
+}
+
+impl<T> MultibootSlice<T> {
+    /// SAFETY: This is only safe if all 3 parameters (len, addr and type) are valid.
+    ///
+    /// This function takes a container object as a parameter. The lifetime of the container object
+    /// is used as the lifetime of the returned cstr.
+    pub unsafe fn to_slice<P>(self, _container: &P) -> &[T] {
+        let ptr = self.addr.as_ptr();
+        unsafe {
+            core::slice::from_raw_parts(ptr, self.len as usize)
+        }
+    }
 }
 
 const_assert!(MULTIBOOT_HEADER.checksum.wrapping_add(FLAGS + MULTIBOOT_HEADER_MAGIC) == 0);
@@ -104,75 +157,12 @@ pub(crate) enum MultibootInfoFlags {
     FramebufferInfo = 0x1000,
 }
 
-#[derive(Copy, Clone)]
-#[repr(transparent)]
-pub(crate) struct MultibootPtr<T>(pub u32, PhantomData<T>);
-
-impl<T> MultibootPtr<T> {
-    /// Get the raw pointer out. Note this is safe. Its only potentially unsafe to dereference the
-    /// pointer.
-    pub fn as_ptr(self) -> *const T {
-        // Extra coersion probably unnecessary.
-        self.0 as usize as *const T
-    }
-}
-
-#[derive(uDebug, Copy, Clone)]
-#[repr(transparent)]
-pub(crate) struct CStr32(u32);
-
-impl CStr32 {
-    /// SAFETY:
-    ///
-    /// The string must be valid, and in valid memory.
-    ///
-    /// This function takes a container object as a parameter. The lifetime of the container object
-    /// is used as the lifetime of the returned cstr.
-    pub unsafe fn as_cstr<P>(self, _container: &P) -> Option<&CStr> {
-        unsafe {
-            // If the cstr is null, its not clear what the behaviour should be. In classic C spec
-            // fashion, there is no documentation on whether or not any given string is guaranteed
-            // to exist.
-            //
-            // We could interpret null strings as empty, but thats not quite right. Or we could
-            // panic - which is reasonable behaviour.
-            if self.0 == 0 {
-                None
-            } else {
-                Some(CStr::from_ptr(self.0 as usize as *const c_char))
-            }
-        }
-    }
-}
-
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub(crate) struct MultibootSlice<T> {
-    pub len: u32,
-    pub addr: MultibootPtr<T>,
-
-    // Could add PhantomData of type T to make coercing more safe?
-}
-
-impl<T> MultibootSlice<T> {
-    /// SAFETY: This is only safe if all 3 parameters (len, addr and type) are valid.
-    ///
-    /// This function takes a container object as a parameter. The lifetime of the container object
-    /// is used as the lifetime of the returned cstr.
-    pub unsafe fn to_slice<P>(self, _container: &P) -> &[T] {
-        let ptr = self.addr.as_ptr();
-        unsafe {
-            core::slice::from_raw_parts(ptr, self.len as usize)
-        }
-    }
-}
-
 /// Some slices in the struct use a count of the items. Some use the byte length. Bleh.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub(crate) struct MultibootByteLenSlice<T> {
     pub byte_len: u32,
-    pub addr: MultibootPtr<T>,
+    pub addr: U32Ptr<T>,
 
     // Could add PhantomData of type T to make coercing more safe?
 }
@@ -248,26 +238,26 @@ pub(crate) struct MultibootBootInfo {
     /// arbitrary size. So this requires some care in parsing.
     // pub mmap: MultibootByteLenSlice<MMapEntry>,
     pub mmap_bytelength: u32,
-    pub mmap_addr: MultibootPtr<MMapEntry>,
+    pub mmap_addr: U32Ptr<MMapEntry>,
 
     /// Drive info buffer
     pub drives: MultibootSlice<()>,
 
     /// ROM configuration table
-    pub config_table: MultibootPtr<()>,
+    pub config_table: U32Ptr<()>,
 
     /// Boot loader name
-    pub boot_loader_name: MultibootPtr<()>,
+    pub boot_loader_name: U32Ptr<()>,
 
     /// APM table
-    pub apm_table: MultibootPtr<()>,
+    pub apm_table: U32Ptr<()>,
 
     // The following fields could probably be more cleanly broken into their own structs, but
     // doing it like this matches the definition in the multiboot spec.
 
     // Video
-    pub vbe_control_info: MultibootPtr<()>,
-    pub vbe_mode_info: MultibootPtr<()>,
+    pub vbe_control_info: U32Ptr<()>,
+    pub vbe_mode_info: U32Ptr<()>,
     pub vbe_mode: u16,
     pub vbe_interface_seg: u16,
     pub vbe_interface_off: u16,
