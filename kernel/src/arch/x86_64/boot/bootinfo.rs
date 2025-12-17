@@ -3,6 +3,7 @@ use crate::arch::x86_64::acpi::AcpiRsdp;
 use crate::basic_types::{CpuId, Paddr, PhysRegion};
 use crate::config::CONFIG_MAX_NUM_NODES;
 use crate::utils::fixedarr::FixedArr;
+use super::super::devices::MAX_NUM_DRHU;
 
 /// The maximum number of reserved regions.
 ///
@@ -32,8 +33,10 @@ pub(super) struct BootState {
     pub num_ioapic: u32,
 
     // paddr_t      ioapic_paddr[CONFIG_MAX_NUM_IOAPIC];
-    // uint32_t     num_drhu; /* number of IOMMUs */
-    // paddr_t      drhu_list[MAX_NUM_DRHU]; /* list of physical addresses of the IOMMUs */
+
+    /// list of physical addresses of the IOMMUs
+    pub drhu_list: FixedArr<Paddr, MAX_NUM_DRHU>,
+
     // acpi_rmrr_list_t rmrr_list;
 
     /// A copy of the RSDP

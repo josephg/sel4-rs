@@ -10,3 +10,5 @@ pub(crate) mod config;
 pub(crate) mod arch;
 pub(crate) mod hardware;
 pub(crate) mod stack;
+mod machine;
+mod boot;

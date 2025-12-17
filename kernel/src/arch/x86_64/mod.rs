@@ -7,6 +7,14 @@ pub mod hardware;
 mod boot;
 mod acpi;
 mod machine;
+mod cpu;
+
+#[cfg(feature = "smp")]
+mod smp;
+mod pic;
+mod asm;
+mod interrupt;
+pub mod devices;
 
 /// This is a wrapper for u32 values we read from system descriptor tables which are actually
 /// pointers to some data.

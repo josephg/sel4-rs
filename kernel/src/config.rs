@@ -1,12 +1,20 @@
 //! This file contains SeL4's configuration time parameters
 //! Right now these values are all hard coded, but we could totally take them at compile time with
 //! some work.
+//!
+//! Note I don't intend to ever implement the full set of features here that sel4 supports. Mostly,
+//! I'm not interested in any features that are only needed or used on legacy chipsets. For example,
+//! you can't configure this port to use PIC (it must use APIC). And you can't disable IOMMU.
 
+use crate::const_assert;
 
 /// Max number of CPU cores to boot.
 ///
 /// TODO: In SeL4 this defaults to 1, which seems insufficient.
+#[cfg(feature = "smp")]
 pub const CONFIG_MAX_NUM_NODES: usize = 32;
+#[cfg(not(feature = "smp"))]
+pub const CONFIG_MAX_NUM_NODES: usize = 1;
 
 /// Configure the maximum number of IOAPIC controllers that can be supported. SeL4
 /// will detect IOAPICs regardless of whether the IOAPIC will actually be used as
@@ -28,3 +36,12 @@ pub(crate) enum ConfigGraphicsMode {
 /// multiboot header and is merely a hint, the boot loader is free to ignore or set some
 /// other mode.
 pub(crate) const CONFIG_MULTIBOOT_GRAPHICS_MODE: ConfigGraphicsMode = ConfigGraphicsMode::None;
+
+/// Prevent against the Meltdown vulnerability by using a reduced Static Kernel
+/// Image and Micro-state window instead of having all kernel state in the kernel window.
+/// This only needs to be enabled if deploying to a vulnerable processor.
+pub(crate) const CONFIG_KERNEL_SKIM_WINDOW: bool = false;
+
+
+
+const_assert!(CONFIG_KERNEL_SKIM_WINDOW == false, "SKIM window not implemented.");

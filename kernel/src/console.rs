@@ -46,6 +46,19 @@ macro_rules! kprintln {
     ($($arg:tt)*) => {{
         let port = unsafe { $crate::console::DEBUG_PORT.get_mut() };
         ufmt::uwriteln!(port, $($arg)*);
+    }};
+}
+
+
+/// This is a variant of println for printing out warnings.
+///
+/// Right now this is identical to kprintln, but that may change.
+#[macro_export]
+macro_rules! kwarnln {
+    () => { $crate::console::kprint!("\n") };
+    ($($arg:tt)*) => {{
+        let port = unsafe { $crate::console::DEBUG_PORT.get_mut() };
+        ufmt::uwriteln!(port, $($arg)*);
     }};}
 
 /// Print a message and halt the computer. panic!() will also work, but this adds much less binary

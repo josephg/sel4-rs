@@ -62,8 +62,12 @@ impl NumUtils for u32 {
 
 #[macro_export]
 macro_rules! const_assert {
-    ($condition:expr) => {
+    ($condition:expr $(,)?) => {
         #[allow(unknown_lints, clippy::eq_op)]
         const _: () = assert!($condition);
+    };
+    ($condition:expr, $($msg:tt)+) => {
+        #[allow(unknown_lints, clippy::eq_op)]
+        const _: () = assert!($condition, $($msg)+);
     };
 }

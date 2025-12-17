@@ -82,6 +82,12 @@ impl<T, const N: usize> FixedArr<T, N> {
     }
 }
 
+impl<T, const N: usize> Default for FixedArr<T, N> where T: Default + Copy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a, T, const N: usize> IntoIterator for &'a FixedArr<T, N> {
     type Item = &'a T;
     type IntoIter = core::slice::Iter<'a, T>;

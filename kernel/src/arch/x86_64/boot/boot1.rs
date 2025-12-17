@@ -6,26 +6,28 @@
 //! Notably, [boot_sys] in this file is jumped to directly from the assembly code in boot0 after
 //! setting up the kernel stack.
 
-use crate::basic_types::{Paddr, PhysRegion};
-use crate::arch::x86_64::boot::multiboot::{MMapEntry, MMapType, MultibootBootInfo, MultibootInfoFlags, MULTIBOOT_BOOTLOADER_MAGIC};
-use crate::console::init_serial;
-use crate::{kpanic, kprintln};
-use crate::utils::{halt, NumUtils};
 use crate::arch::constants::PAGE_BITS;
-use crate::arch::x86_64::acpi::acpi_init;
+use crate::arch::x86_64::acpi::{acpi_dmar_scan, acpi_init, AcpiRsdp};
 use crate::arch::x86_64::boot::bootinfo::{BootState, MemPRegs, MAX_NUM_FREEMEM_REG};
+use crate::arch::x86_64::boot::multiboot::{MMapEntry, MMapType, MultibootBootInfo, MultibootInfoFlags, MULTIBOOT_BOOTLOADER_MAGIC};
+use crate::arch::x86_64::cpu::{ia32_arch_caps_msr_get_rdcl_no, read_ia32_arch_cap_msr, x86_cpuid_get_vendor, CpuVendor};
 use crate::arch::x86_64::U32Ptr;
+use crate::basic_types::{Paddr, PhysRegion};
+use crate::boot::get_p_reg_kernel_img;
+use crate::config::CONFIG_KERNEL_SKIM_WINDOW;
+use crate::console::init_serial;
 use crate::hardware::PADDR_TOP;
+use crate::utils::{halt, NumUtils};
+use crate::{kpanic, kprintln, kwarnln};
+use crate::arch::devices::MAX_NUM_DRHU;
+use crate::arch::x86_64::machine::IRQ_INT_OFFSET;
+use crate::arch::x86_64::pic::{pic_disable, pic_remap_irqs};
+use crate::utils::fixedarr::FixedArr;
 
 const SEL4_MULTIBOOT_MAX_MMAP_ENTRIES: usize = 50;
 
 const HIGHMEM_PADDR: usize = 0x100000;
 
-#[unsafe(link_section = ".boot.text")]
-fn try_boot_sys() -> Result<(), ()> {
-
-    Ok(())
-}
 
 
 // #[derive(uDebug)]
@@ -123,6 +125,8 @@ unsafe fn parse_mem_map(mem_p_regs: &mut MemPRegs, bytelen: u32, base_addr: U32P
     Ok(())
 }
 
+/// Try and initialize boot info from multiboot v1. Multiboot v1 is used by qemu.
+///
 /// This function creates and populates a BootState object on the stack. In SeL4 this happens in
 /// static memory - which might be to reduce stack pressure? Anyway, its certainly cleaner rust code
 /// like this.
@@ -221,13 +225,15 @@ fn try_boot_sys_mbi1(mbi: &MultibootBootInfo) -> Result<BootState, ()> {
         kprintln!("Multiboot gave us no video information");
     }
 
+    // Find and check ACPI tables.
     let acpi_rsdp = acpi_init()?;
 
     // todo!()
     Ok(BootState {
         avail_p_reg: Default::default(),
-        kern_p_reg: Default::default(),
+        kern_p_reg: get_p_reg_kernel_img(),
         num_ioapic: 0,
+        drhu_list: Default::default(),
         acpi_rsdp,
         mods_end_paddr,
         boot_module_start,
@@ -238,6 +244,86 @@ fn try_boot_sys_mbi1(mbi: &MultibootBootInfo) -> Result<BootState, ()> {
     })
 }
 
+#[unsafe(link_section = ".boot.text")]
+fn try_boot_sys(mut boot_state: BootState) -> Result<(), ()> {
+    // kern_p_reg is set above.
+    let vendor = x86_cpuid_get_vendor();
+
+    // DEPARTURE: Not detecting and warning on microarch deviations.
+
+    // see if we can definitively say whether we need the skim window by
+    // checking whether the CPU is vulnerable to rogue data cache loads (rdcl)
+    if let Some(msr) = read_ia32_arch_cap_msr() {
+        let rdcl_no = ia32_arch_caps_msr_get_rdcl_no(msr);
+
+        if rdcl_no && CONFIG_KERNEL_SKIM_WINDOW {
+            kwarnln!("CPU reports not vulnerable to Rogue Data Cache Load (aka meltdown) \n\
+                yet SKIM window is enabled. Performance is being needlessly impacted, consider \n\
+                disabling.");
+        } else if !rdcl_no && !CONFIG_KERNEL_SKIM_WINDOW {
+            kwarnln!("CPU reports it is vulnerable to Rogue Data Cache Load (aka meltdown) \n\
+                yet SKIM window is DISABLED. Please rebuild with SKIM window enabled.");
+        }
+    } else {
+        // hardware doesn't tell us directly so guess based on CPU vendor
+        match (CONFIG_KERNEL_SKIM_WINDOW, vendor) {
+            (true, CpuVendor::Amd) => {
+                kwarnln!("SKIM window for mitigating Meltdown (https://www.meltdownattack.com) \
+                       not necessary for AMD and performance is being needlessly affected, \
+                       consider disabling");
+            },
+            (false, CpuVendor::Intel) => {
+                kwarnln!("***WARNING*** SKIM window not enabled, this machine is probably vulnerable \
+                   to Meltdown (https://www.meltdownattack.com), consider enabling\n");
+            },
+            _ => {}
+        }
+    }
+
+    if cfg!(feature = "smp") {
+        todo!("TODO: SMP code.");
+
+        /* copy boot code for APs to lower memory to run in real mode */
+        // if (!copy_boot_code_aps(boot_state.mem_lower)) {
+        //     return false;
+        // }
+        // /* Initialize any kernel TLS */
+        // mode_init_tls(0);
+    }
+
+    kprintln!("Kernel loaded to: start=0x{:x} end=0x{:x} size=0x{:x}",
+           boot_state.kern_p_reg.start,
+           boot_state.kern_p_reg.end,
+           boot_state.kern_p_reg.end - boot_state.kern_p_reg.start
+    );
+
+    // remapping legacy IRQs to their correct vectors. Even though we disable PIC, we still
+    // configure it first so it doesn't cause trouble. I think this is paranoia, but I'm here for
+    // it.
+    pic_remap_irqs(IRQ_INT_OFFSET as _);
+
+    // Disable the PIC. We need to do this before enabling APIC.
+    unsafe { pic_disable() };
+
+    // DEPARTURE: SeL4 validates APIC again here, even though we already did that above.
+
+    // DEPARTURE: Skip the FADT scan. We don't actually care about the FADT contents unless
+    // CONFIG_USE_LOGICAL_IDS is enabled, but we don't support that anyway.
+    // acpi_fadt_scan(&boot_state.acpi_rsdp);
+
+    // DEPARTURE: No support for disabling IOMMU.
+
+    // Query available IOMMUs from ACPI.
+    acpi_dmar_scan(&boot_state.acpi_rsdp, &mut boot_state.drhu_list, ());
+
+
+
+    // let vendor = VendorInfo::new().as_vendor();
+    // kprintln!("vendor {:?}", vendor);
+    // if let Some
+
+    Ok(())
+}
 
 // pub fn vga_write_str(s: &str) {
 //     let vga = 0xb8000 as *mut u8;
@@ -280,23 +366,26 @@ pub extern "C" fn boot_sys(multiboot_magic: u32, mbi: u32) -> ! {
 
     // Multiboot 1 and 2 both pass modules to the kernel slightly differently.
 
-    if multiboot_magic == MULTIBOOT_BOOTLOADER_MAGIC {
+    let boot_state = if multiboot_magic == MULTIBOOT_BOOTLOADER_MAGIC {
         kprintln!("Booting via multiboot v1 {:x}", mbi);
 
         let ptr = mbi as *const MultibootBootInfo;
         // The multiboot info struct is at mbi, which will be in the lower linear memory segment.
         let mbi: &'static MultibootBootInfo = unsafe { &*ptr };
 
-        // Just this alone adds 35kb to the binary!
-        // kprintln!("Multiboot info: {:#?}", mbi);
+        let Ok(boot_state) = try_boot_sys_mbi1(mbi) else {
+            kpanic!("Failed to boot from multiboot. Bailing!");
+        };
 
-        if let Err(()) = try_boot_sys_mbi1(mbi) {
-            kpanic!("Multiboot returned unexpected or unusable data.");
-        }
+        boot_state
+    } else {
+        // DEPARTURE: Multiboot v2 not implemented yet.
+        kpanic!("No valid multiboot info found. (Multibootv2 not implemented yet.)");
+    };
 
+    if let Err(()) = try_boot_sys(boot_state) {
+        kpanic!("Failure in try_boot_sys");
     }
-
-    try_boot_sys().unwrap();
 
     kprintln!("END OF LINE ------ BEEEEEEPPPP");
     halt();

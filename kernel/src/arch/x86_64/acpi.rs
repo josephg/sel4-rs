@@ -12,12 +12,15 @@ use ufmt::derive::uDebug;
 use crate::arch::U32Ptr;
 use crate::arch::x86_64::machine::{BIOS_PADDR_END, BIOS_PADDR_START};
 use crate::{const_assert, kprintln};
+use crate::basic_types::Paddr;
+use crate::utils::fixedarr::FixedArr;
+use super::devices::MAX_NUM_DRHU;
 
 const ACPI_V1_SIZE: usize = 20;
 const ACPI_V2_SIZE: usize = 36;
 
 /// Generic System Descriptor Table Header
-#[repr(C, packed(4))]
+#[repr(C, packed)]
 #[derive(Clone, Copy)]
 struct AcpiHeader {
     signature: [u8; 4],
@@ -41,7 +44,8 @@ pub(crate) struct AcpiRsdp {
     checksum: u8,
     oem_id: [u8; 6],
     revision: u8,
-    /// Deprecated since version 2, but still part of the checksum.
+    /// Given we're 64 bit only, we can use the xsdt instead of rsdt. But the rsdt is still valid
+    /// and gives us everything we need to set up the kernel.
     rsdt_address: U32Ptr<AcpiRsdt>,
 
     length: u32,
@@ -53,10 +57,21 @@ pub(crate) struct AcpiRsdp {
 
 const_assert!(size_of::<AcpiRsdp>() == ACPI_V2_SIZE);
 
+#[repr(C, packed)]
 struct AcpiRsdt {
     header: AcpiHeader,
+    /// The RSDT is variable sized, and contains some number of entries which we can calculate from
+    /// the header length field.
     // TODO: Replace this u32 with a U32Ptr.
-    entry: u32,
+    entries: [u32; 0],
+}
+
+/// Fixed ACPI description table (FADT). Partial as we only need flags.
+#[repr(C)]
+struct AcpiFadt {
+    header: AcpiHeader,
+    _reserved: [u8; 76],
+    flags: u32,
 }
 
 #[unsafe(link_section = ".boot.text")]
@@ -136,10 +151,10 @@ fn validate_rsdp(rsdp: &AcpiRsdp) -> Result<(), ()> {
     kprintln!("BIOS: RSDT paddr=0x{:x}", rsdp.rsdt_address.0);
     let rsdt = unsafe { rsdp.rsdt_address.as_static_ref() };
 
-    if !checksum_valid(rsdt) {
-        kprintln!("ACPI: RSDT checksum failure");
-        return Err(());
-    }
+    // if !checksum_valid(rsdt) {
+    //     kprintln!("ACPI: RSDT checksum failure");
+    //     return Err(());
+    // }
 
     Ok(())
 }
@@ -162,3 +177,63 @@ pub(super) fn acpi_init() -> Result<AcpiRsdp, ()> {
 
     Ok(*rsdp)
 }
+
+// DEPARTURE: This fadt scan is only to check flags if we have CONFIG_USE_LOGICAL_IDS set.
+// But logical IDs aren't supported. So I'm just gonna skip this!
+
+// #[unsafe(link_section = ".boot.text")]
+// pub(super) fn acpi_fadt_scan(rsdp: &AcpiRsdp) {
+//     let rsdt = unsafe { rsdp.rsdt_address.as_static_ref() };
+//
+//     assert!(rsdt.header.length as usize >= size_of::<AcpiHeader>());
+//
+//     // Divide by uint32_t explicitly as this is the size as mandated by the ACPI standard.
+//     let entries: u32 = (rsdt.header.length - size_of::<AcpiHeader>() as u32) / size_of::<u32>() as u32;
+//     let base_ptr = &raw const rsdt.entries as *const u32;
+//
+//     // The entry table is misaligned - at least on qemu. Have to handle this carefully.
+//     for count in 0..entries {
+//         let entry_ptr_ptr = unsafe { base_ptr.add(count as usize) };
+//         let entry_ptr = unsafe { entry_ptr_ptr.read_unaligned() };
+//
+//         // This pointer is probably also misaligned. :p
+//         let fadt_ptr = entry_ptr as usize as *const AcpiFadt;
+//         // It feels gross reading the whole fadt structure onto the stack. I'm not sure if thats
+//         // actually happening here but I kinda hate it.
+//         //
+//         // Hopefully the compiler can generate some acceptable code here...
+//         let fadt = unsafe { fadt_ptr.read_unaligned() };
+//
+//         if &fadt.header.signature == b"FACP" {
+//             if checksum_valid(&fadt) {
+//                 kprintln!("ACPI: FADT paddr=0x{:x} flags=0x{:x}", fadt_ptr as usize, fadt.flags);
+//             }
+//         }
+//
+//
+//         // p.read_unaligned();
+//     }
+// }
+
+#[unsafe(link_section = ".boot.text")]
+pub fn acpi_dmar_scan(rsdp: &AcpiRsdp, drhu_list: &mut FixedArr<Paddr, MAX_NUM_DRHU>, p3: ()) {
+    let rsdt = unsafe { rsdp.rsdt_address.as_static_ref() };
+    assert!(rsdt.header.length as usize >= size_of::<AcpiHeader>());
+
+    // Divide by uint32_t explicitly as this is the size as mandated by the ACPI standard.
+    let entries: u32 = (rsdt.header.length - size_of::<AcpiHeader>() as u32) / size_of::<u32>() as u32;
+    let base_ptr = &raw const rsdt.entries as *const u32;
+
+    kprintln!("Entries: {}", entries);
+    // The entry table is misaligned - at least on qemu. Have to handle this carefully.
+    for count in 0..entries {
+        let entry_ptr_ptr = unsafe { base_ptr.add(count as usize) };
+        let entry_ptr = unsafe { entry_ptr_ptr.read_unaligned() };
+
+        let header_ptr = entry_ptr as usize as *const AcpiHeader;
+        let header = unsafe { header_ptr.read_unaligned() };
+        let sig = core::str::from_utf8(header.signature.as_slice()).unwrap();
+        kprintln!("RSDT entry at 0x{:x} with signature {}", entry_ptr, sig);
+    }
+}
+
