@@ -7,7 +7,7 @@
 //! setting up the kernel stack.
 
 use crate::arch::constants::PAGE_BITS;
-use crate::arch::x86_64::acpi::{acpi_dmar_scan, acpi_init, AcpiRsdp};
+use crate::arch::x86_64::acpi::{AcpiRsdp};
 use crate::arch::x86_64::boot::bootinfo::{BootState, MemPRegs, MAX_NUM_FREEMEM_REG};
 use crate::arch::x86_64::boot::multiboot::{MMapEntry, MMapType, MultibootBootInfo, MultibootInfoFlags, MULTIBOOT_BOOTLOADER_MAGIC};
 use crate::arch::x86_64::cpu::{ia32_arch_caps_msr_get_rdcl_no, read_ia32_arch_cap_msr, x86_cpuid_get_vendor, CpuVendor};
@@ -226,7 +226,8 @@ fn try_boot_sys_mbi1(mbi: &MultibootBootInfo) -> Result<BootState, ()> {
     }
 
     // Find and check ACPI tables.
-    let acpi_rsdp = acpi_init()?;
+    let acpi_rsdp = AcpiRsdp::init()?;
+    acpi_rsdp.get_rsdt().print_table_entries();
 
     // todo!()
     Ok(BootState {
@@ -314,7 +315,9 @@ fn try_boot_sys(mut boot_state: BootState) -> Result<(), ()> {
     // DEPARTURE: No support for disabling IOMMU.
 
     // Query available IOMMUs from ACPI.
-    acpi_dmar_scan(&boot_state.acpi_rsdp, &mut boot_state.drhu_list, ());
+    // DEPARTURE: DMAR only exists for IOMMU on intel chipsets. Not implemented yet.
+    // acpi_dmar_scan(boot_state.acpi_rsdp.get_rsdt(), &mut boot_state.drhu_list, ());
+
 
 
 

@@ -42,6 +42,11 @@ pub(crate) const CONFIG_MULTIBOOT_GRAPHICS_MODE: ConfigGraphicsMode = ConfigGrap
 /// This only needs to be enabled if deploying to a vulnerable processor.
 pub(crate) const CONFIG_KERNEL_SKIM_WINDOW: bool = false;
 
+/// IOMMU support for VT-d enabled chipsets. This is an intel-only feature. AMD chipsets also
+/// support IOMMU but use a different IOMMU technology.
+/// TODO: This is currently unsupported, since I only have an AMD chipset to test with.
+pub(crate) const CONFIG_IOMMU: bool = false;
+
 
 
 const_assert!(CONFIG_KERNEL_SKIM_WINDOW == false, "SKIM window not implemented.");
