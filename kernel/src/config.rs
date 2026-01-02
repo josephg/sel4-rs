@@ -48,5 +48,4 @@ pub(crate) const CONFIG_KERNEL_SKIM_WINDOW: bool = false;
 pub(crate) const CONFIG_IOMMU: bool = false;
 
 
-
 const_assert!(CONFIG_KERNEL_SKIM_WINDOW == false, "SKIM window not implemented.");

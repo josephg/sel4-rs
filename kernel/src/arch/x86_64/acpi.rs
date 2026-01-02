@@ -7,34 +7,20 @@
 //! - include/plat/pc99/plat/machine/acpi.h
 //! - src/plat/pc99/machine/acpi.c
 
-use core::slice;
+use core::{ptr, slice};
+use core::marker::PhantomData;
+use core::mem::offset_of;
 use ufmt::derive::uDebug;
 use crate::arch::U32Ptr;
 use crate::arch::x86_64::machine::{BIOS_PADDR_END, BIOS_PADDR_START};
-use crate::{const_assert, kprintln};
-use crate::basic_types::Paddr;
+use crate::{const_assert, kprint, kprintln};
+use crate::basic_types::{CpuId, Paddr};
 use crate::utils::fixedarr::FixedArr;
 use super::devices::MAX_NUM_DRHU;
+use crate::config::*;
 
 const ACPI_V1_SIZE: usize = 20;
 const ACPI_V2_SIZE: usize = 36;
-
-/// Generic System Descriptor Table Header.
-///
-/// Not guaranteed to be aligned in memory.
-#[repr(C, packed)]
-#[derive(Clone, Copy)]
-struct AcpiHeader {
-    signature: [u8; 4],
-    length: u32,
-    revision: u8,
-    checksum: u8,
-    oem_id: [u8; 6],
-    oem_table_id: [u8; 8],
-    oem_revision: u32,
-    creator_id: [u8; 4],
-    creator_revision: u32,
-}
 
 /// ACPI Root System Descriptor Pointer. Note this structure IS NOT stored in a way that's memory
 /// aligned.
@@ -58,9 +44,30 @@ pub(crate) struct AcpiRsdp {
     _reserved: [u8; 3],
 }
 
+/// The signature for a given table entry. It might be nice to newtype this.
+type RsdtSig = [u8; 4];
+
+/// Generic System Descriptor Table Header.
+///
+/// Not guaranteed to be aligned in memory.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+struct AcpiHeader {
+    signature: RsdtSig,
+    length: u32,
+    revision: u8,
+    checksum: u8,
+    oem_id: [u8; 6],
+    oem_table_id: [u8; 8],
+    oem_revision: u32,
+    creator_id: [u8; 4],
+    creator_revision: u32,
+}
+
 const_assert!(size_of::<AcpiRsdp>() == ACPI_V2_SIZE);
 
 #[repr(C, packed)]
+#[derive(Copy, Clone)]
 pub(crate) struct AcpiRsdt {
     header: AcpiHeader,
     /// The RSDT is variable sized, and contains some number of entries which we can calculate from
@@ -70,12 +77,100 @@ pub(crate) struct AcpiRsdt {
 }
 
 /// Fixed ACPI description table (FADT). Partial as we only need flags.
-#[repr(C)]
+#[repr(C)] // Not packed for some reason.
+#[derive(Copy, Clone)]
 struct AcpiFadt {
     header: AcpiHeader,
     _reserved: [u8; 76],
     flags: u32,
 }
+const_assert!(size_of::<AcpiFadt>() == size_of::<AcpiHeader>() + 80);
+
+// *** MADT (Multiple APIC Description Table). These describe the list of CPUs available on the
+// system and the list of IOAPICs available.
+
+/// Multiple APIC Description Table (MADT). Signature is "APIC".
+#[repr(C, packed)]
+#[derive(Copy, Clone)]
+struct AcpiMadt {
+    header: AcpiHeader,
+    apic_addr: u32,
+    flags: u32,
+}
+const_assert!(size_of::<AcpiMadt>() == size_of::<AcpiHeader>() + 8);
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct AcpiMadtHeader {
+    madt_type: u8,
+    length: u8,
+}
+const_assert!(size_of::<AcpiMadtHeader>() == 2);
+
+#[derive(uDebug, Copy, Clone, Eq, PartialEq)]
+#[repr(u8)]
+enum AcpiMadtStructType {
+    /// Represents a single logical processor and its local interrupt controller.
+    APIC = 0,
+    IOAPIC = 1,
+    // /// Interrupt Source Override
+    // ISO = 2,
+    /// Identical to Local APIC. Only used when the ioapic struct would overflow.
+    X2APIC = 9,
+}
+
+#[repr(C, packed)]
+#[derive(Copy, Clone)]
+struct AcpiMadtApic {
+    header: AcpiMadtHeader,
+    cpu_id: u8,
+    apic_id: u8,
+    flags: u32,
+}
+const_assert!(size_of::<AcpiMadtApic>() == size_of::<AcpiMadtHeader>() + 6);
+
+#[repr(C, packed)]
+#[derive(Copy, Clone)]
+struct AcpiMadtX2Apic {
+    header: AcpiMadtHeader,
+    _reserved: u16,
+    x2apic_id: u32,
+    flags: u32,
+    acpi_processor_uid: u32,
+}
+const_assert!(size_of::<AcpiMadtX2Apic>() == size_of::<AcpiMadtHeader>() + 14);
+
+#[repr(C)] // not packed
+#[derive(Copy, Clone)]
+struct AcpiMadtIOApic {
+    header: AcpiMadtHeader,
+    ioapic_id: u8,
+    _reserved: u8,
+    ioapic_addr: u32,
+    gsib: u32,
+}
+const_assert!(size_of::<AcpiMadtIOApic>() == size_of::<AcpiMadtHeader>() + 10);
+
+// ISOs are defined in SeL4 but never actually used.
+// #[repr(C)] // not packed
+// #[derive(Copy, Clone)]
+// struct AcpiMadtIso {
+//     header: AcpiMadtHeader,
+//     /// Always 0 (ISA)
+//     bus: u8,
+//     source: u8,
+//     gsi: u32,
+//     flags: u16,
+// }
+//
+// // We can't assert on the sizeof acpi_madt_iso because it contains trailing
+// // padding.
+// const_assert!(offset_of!(AcpiMadtIso, flags) == size_of::<AcpiMadtHeader>() + 6);
+
+
+
+
+
 
 #[unsafe(link_section = ".boot.text")]
 fn acpi_calc_checksum<T>(obj: &T) -> u8 {
@@ -197,28 +292,141 @@ impl AcpiRsdp {
     }
 }
 
+struct AcpiIterator<'a> {
+    // Honestly I'd much rather use a slice here, but the ACPI table is often misaligned in memory.
+    // It certainly is in QEMU.
+    next_ptr: *const u32,
+    end_ptr: *const u32,
+
+    phantom: PhantomData<&'a AcpiRsdt>,
+}
+
+/// Iterate over all the ACPI table entries.
+impl<'a> Iterator for AcpiIterator<'a> {
+    // Each item is actually a pointer to a whole ACPI table entry, starting with a header.
+    type Item = (RsdtSig, U32Ptr<AcpiHeader>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next_ptr >= self.end_ptr { return None; }
+
+        // The entry pointers are misaligned. Have to handle this carefully.
+        let entry_ptr = unsafe { self.next_ptr.read_unaligned() };
+
+        let header_ptr = entry_ptr as usize as *const AcpiHeader;
+        let sig_ptr = unsafe { ptr::addr_of!((*header_ptr).signature) };
+        let sig = unsafe { *sig_ptr };
+
+        self.next_ptr = unsafe { self.next_ptr.add(1) };
+
+        Some((sig, U32Ptr::new(entry_ptr)))
+    }
+}
+
 impl AcpiRsdt {
-    // DEPARTURE: This doesn't exist in SeL4.
-    // TODO: It'd be nice to make an iterator for this.
-    #[unsafe(link_section = ".boot.text")]
-    pub(crate) fn print_table_entries(&self) {
+    fn iter(&self) -> AcpiIterator<'_> {
         assert!(self.header.length as usize >= size_of::<AcpiHeader>());
 
         // Divide by uint32_t explicitly as this is the size as mandated by the ACPI standard.
         let entries: u32 = (self.header.length - size_of::<AcpiHeader>() as u32) / size_of::<u32>() as u32;
         let base_ptr = &raw const self.entries as *const u32;
 
-        kprintln!("ACPI number of entries: {}", entries);
-        // The entry table is misaligned - at least on qemu. Have to handle this carefully.
-        for count in 0..entries {
-            let entry_ptr_ptr = unsafe { base_ptr.add(count as usize) };
-            let entry_ptr = unsafe { entry_ptr_ptr.read_unaligned() };
-
-            let header_ptr = entry_ptr as usize as *const AcpiHeader;
-            let header = unsafe { header_ptr.read_unaligned() };
-            let sig = core::str::from_utf8(header.signature.as_slice()).unwrap();
-            kprintln!("  RSDT entry at 0x{:x} with signature {}", entry_ptr, sig);
+        AcpiIterator {
+            next_ptr: base_ptr,
+            end_ptr: unsafe { base_ptr.add(entries as usize) },
+            phantom: PhantomData,
         }
+    }
+
+    // DEPARTURE: This doesn't exist in SeL4.
+    // TODO: It'd be nice to make an iterator for this.
+    #[unsafe(link_section = ".boot.text")]
+    pub(crate) fn print_table_entries(&self) {
+        for (sig, ptr) in self.iter() {
+            let sig = core::str::from_utf8(sig.as_slice()).unwrap();
+            kprintln!("RSDT entry at 0x{:x} with signature {}", ptr.0, sig);
+        }
+    }
+
+    #[unsafe(link_section = ".boot.text")]
+    pub(crate) fn madt_scan(&self) -> (FixedArr<Paddr, CONFIG_MAX_NUM_IOAPIC>, FixedArr<CpuId, CONFIG_MAX_NUM_NODES>) {
+        let mut cpus = FixedArr::new();
+        let mut ioapics = FixedArr::new();
+
+        for (sig, ptr) in self.iter() {
+            if sig != *b"APIC" { continue; }
+
+            let madt_ptr = ptr.0 as *const AcpiMadt;
+
+            /// The byte length of the entire madt region.
+            let len = unsafe { madt_ptr.read_unaligned().header.length };
+
+            kprintln!("ACPI: MADT paddr=0x{:x}", madt_ptr as usize);
+            let apic_addr = unsafe { madt_ptr.read_unaligned().apic_addr };
+
+            kprintln!("ACPI: apic_addr=0x{:x}", apic_addr);
+            let flags = unsafe { madt_ptr.read_unaligned().flags };
+            kprintln!("ACPI: flags=0x{:x}", flags);
+
+            // The madt data is in a series of chunks starting right after the the addr and flags.
+            let mut madt_entry_ptr = unsafe { madt_ptr.add(1) } as *const AcpiMadtHeader;
+            let end_ptr = unsafe { madt_ptr.byte_offset(len as _) } as *const AcpiMadtHeader;
+
+            while madt_entry_ptr < end_ptr {
+                let madt_type = unsafe { *madt_entry_ptr }.madt_type;
+
+                // kprintln!("MADT type {}", madt_type);
+
+                match madt_type {
+                    t if t == AcpiMadtStructType::APIC as u8 => {
+                        // what Intel calls apic_id is what is called cpu_id in seL4!
+                        // let cpu_id =
+                        let apic_ptr = madt_entry_ptr as *const AcpiMadtApic;
+                        let cpu_id = unsafe { (*apic_ptr).apic_id };
+                        let flags = unsafe { (*apic_ptr).flags };
+                        if flags == 1 {
+                            kprintln!("ACPI: MADT_APIC apic_id=0x{:x}", cpu_id);
+
+                            let result = cpus.try_push(cpu_id as CpuId);
+
+                            if let Err(_) = result {
+                                kprintln!("ACPI: Not recording this CPU (via APIC). Only configured to support {} cpus", cpus.len());
+                            }
+                        }
+                    },
+
+                    t if t == AcpiMadtStructType::X2APIC as u8 => {
+                        // TODO! This doesn't show up in qemu, so I'm skipping it for now.
+                        unimplemented!();
+                    },
+
+                    t if t == AcpiMadtStructType::IOAPIC as u8 => {
+                        let ioapic_ptr = madt_entry_ptr as *const AcpiMadtIOApic;
+
+                        let ioapic_id = unsafe { ioapic_ptr.read_unaligned().ioapic_id };
+                        let ioapic_addr = unsafe { ioapic_ptr.read_unaligned().ioapic_addr };
+                        let gsib = unsafe { ioapic_ptr.read_unaligned().gsib };
+
+                        kprintln!("ACPI: MADT_IOAPIC ioapic_id={} ioapic_addr=0x{:x} gsib={}", ioapic_id, ioapic_addr, gsib);
+
+                        let result = ioapics.try_push(ioapic_addr as usize);
+
+                        if let Err(_) = result {
+                            kprintln!("ACPI: Not recording this IOAPIC, only support {}", ioapics.len());
+                        }
+                    },
+
+                    // Departure: We ignore ISOs. They're printed out in SeL4 but not used.
+
+                    _ => {},
+                }
+
+                madt_entry_ptr = unsafe {
+                    madt_entry_ptr.byte_offset((*madt_entry_ptr).length as isize)
+                };
+            }
+        }
+
+        (ioapics, cpus)
     }
 }
 

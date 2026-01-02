@@ -1,7 +1,7 @@
 use ufmt::derive::uDebug;
 use crate::arch::x86_64::acpi::AcpiRsdp;
 use crate::basic_types::{CpuId, Paddr, PhysRegion};
-use crate::config::CONFIG_MAX_NUM_NODES;
+use crate::config::{CONFIG_MAX_NUM_NODES, CONFIG_MAX_NUM_IOAPIC};
 use crate::utils::fixedarr::FixedArr;
 use super::super::devices::MAX_NUM_DRHU;
 
@@ -30,7 +30,7 @@ pub(super) struct BootState {
     // ui_info_t    ui_info;     /* info about userland images */
 
     /// Number of IOAPICs detected
-    pub num_ioapic: u32,
+    pub ioapic_paddr: FixedArr<Paddr, CONFIG_MAX_NUM_IOAPIC>,
 
     // paddr_t      ioapic_paddr[CONFIG_MAX_NUM_IOAPIC];
 
@@ -46,13 +46,11 @@ pub(super) struct BootState {
     pub mods_end_paddr: Paddr,
     /// physical address of first boot module
     pub boot_module_start: Paddr,
-    /// number of detected cpus
-    pub num_cpus: u32,
 
     /// lower memory size for boot code of APs to run in real mode
     pub mem_lower: u32,
 
-    pub cpus: [CpuId; CONFIG_MAX_NUM_NODES],
+    pub cpus: FixedArr<CpuId, CONFIG_MAX_NUM_NODES>,
 
     pub mem_p_regs: MemPRegs,
 

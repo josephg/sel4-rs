@@ -233,12 +233,11 @@ fn try_boot_sys_mbi1(mbi: &MultibootBootInfo) -> Result<BootState, ()> {
     Ok(BootState {
         avail_p_reg: Default::default(),
         kern_p_reg: get_p_reg_kernel_img(),
-        num_ioapic: 0,
+        ioapic_paddr: Default::default(),
         drhu_list: Default::default(),
         acpi_rsdp,
         mods_end_paddr,
         boot_module_start,
-        num_cpus: 0,
         mem_lower: mbi.mem_lower,
         cpus: Default::default(),
         mem_p_regs,
@@ -318,7 +317,9 @@ fn try_boot_sys(mut boot_state: BootState) -> Result<(), ()> {
     // DEPARTURE: DMAR only exists for IOMMU on intel chipsets. Not implemented yet.
     // acpi_dmar_scan(boot_state.acpi_rsdp.get_rsdt(), &mut boot_state.drhu_list, ());
 
+    (boot_state.ioapic_paddr, boot_state.cpus) = boot_state.acpi_rsdp.get_rsdt().madt_scan();
 
+    kprintln!("{:?}", boot_state.cpus);
 
 
     // let vendor = VendorInfo::new().as_vendor();
